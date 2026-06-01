@@ -1,7 +1,7 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## Unreleased
+## 1.9.0
 
 - Reduce memory and disk pressure by disabling OpenCode snapshots by default and ignoring noisy Home Assistant internal paths in OpenCode's file watcher.
 - Improve Zigbee2MQTT URL configuration by documenting the required `http://` or `https://` scheme and automatically treating host/IP-only `z2m_url` values as `http://`.
