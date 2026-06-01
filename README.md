@@ -138,6 +138,8 @@ Simply run `/connect` and select **OpenCode Zen** to get started for free.
 
 > **This add-on has read/write access to your Home Assistant configuration directory.**
 
+It also mounts Home Assistant add-on development folders (`/addons` and `/addon_configs`) so OpenCode can help with custom add-ons. Treat `/addon_configs` as sensitive because it may contain configuration data for other add-ons.
+
 OpenCode includes a multi-layered validation pipeline designed to prevent AI-written configuration from causing your Home Assistant to fail to start:
 
 - 🔍 **Automatic config validation** — every config write is validated through HA Core's own check before committing

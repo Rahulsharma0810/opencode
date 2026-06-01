@@ -37,6 +37,7 @@ NC='\033[0m'
 # Read addon version and CPU mode written by init-opencode
 CPU_MODE=$(cat /data/.cpu_mode 2>/dev/null || echo "unknown")
 ADDON_VERSION=$(cat /data/.addon_version 2>/dev/null || echo "unknown")
+ADDON_ACCESS_ENABLED=$(cat /data/.addon_access_enabled 2>/dev/null || echo "false")
 CPU_INFO=""
 if [ "${CPU_MODE}" = "baseline" ]; then
     CPU_INFO=" ${YELLOW}(baseline CPU mode)${NC}"
@@ -97,6 +98,9 @@ show_shell_help() {
 show_banner
 
 echo -e "${WHITE}Working directory:${NC} ${CYAN}/homeassistant${NC}"
+if [ "${ADDON_ACCESS_ENABLED}" = "true" ]; then
+    echo -e "${WHITE}Add-on development:${NC} ${CYAN}/addons${NC} ${GRAY}and${NC} ${CYAN}/addon_configs${NC} ${YELLOW}(sensitive)${NC}"
+fi
 echo -e "${GRAY}First time? Use ${NC}${GREEN}/connect${NC} ${GRAY}inside OpenCode to add your AI provider${NC}"
 echo -e "${GRAY}Customize AI behavior by editing ${NC}${GREEN}AGENTS.md${NC} ${GRAY}in your config folder${NC}"
 echo ""

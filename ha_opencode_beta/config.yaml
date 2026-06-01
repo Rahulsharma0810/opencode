@@ -22,6 +22,11 @@ panel_title: OpenCode Beta
 map:
   - type: homeassistant_config
     read_only: false
+  - type: addons
+    read_only: false
+  - type: all_addon_configs
+    read_only: false
+    path: /addon_configs
 
 # API access - needed for logs, addon discovery, and ingress session creation
 hassio_api: true
@@ -51,6 +56,11 @@ options:
   # Screenshot tool: enables visual verification of dashboards and UI changes.
   # Requires a Long-Lived Access Token (below) to authenticate with the HA frontend.
   screenshot_enabled: false
+
+  # Add-on development access acknowledgement.
+  # The /addons and /addon_configs folders are mounted for custom add-on work.
+  # Enable this to show add-on development guidance in the terminal.
+  addon_access_enabled: false
 
   # Long-lived access token for direct HA Core API access.
   # Required for ESPHome ingress and screenshot tool (create at: Profile → Long-Lived Access Tokens).
@@ -85,6 +95,9 @@ schema:
 
   # Screenshot tool
   screenshot_enabled: bool
+
+  # Add-on development access acknowledgement
+  addon_access_enabled: bool
 
   # HA Core access token
   access_token: str?

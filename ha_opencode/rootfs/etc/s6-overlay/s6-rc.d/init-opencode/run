@@ -17,10 +17,11 @@ CPU_MODE_CONFIG=$(bashio::config 'cpu_mode' || echo "auto")
 MCP_ENABLED=$(bashio::config 'mcp_enabled')
 LSP_ENABLED=$(bashio::config 'lsp_enabled' || echo "true")
 SCREENSHOT_ENABLED=$(bashio::config 'screenshot_enabled' || echo "false")
+ADDON_ACCESS_ENABLED=$(bashio::config 'addon_access_enabled' || echo "false")
 
 ACCESS_TOKEN=$(bashio::config 'access_token' || echo "")
 
-bashio::log.info "Configuration: MCP=${MCP_ENABLED} LSP=${LSP_ENABLED} SCREENSHOT=${SCREENSHOT_ENABLED} CPU_MODE=${CPU_MODE_CONFIG}"
+bashio::log.info "Configuration: MCP=${MCP_ENABLED} LSP=${LSP_ENABLED} SCREENSHOT=${SCREENSHOT_ENABLED} ADDON_ACCESS=${ADDON_ACCESS_ENABLED} CPU_MODE=${CPU_MODE_CONFIG}"
 
 # ==============================================================================
 # Process user-defined environment variables
@@ -81,6 +82,23 @@ if [ -n "${ACCESS_TOKEN}" ]; then
     bashio::log.info "HA Core access token configured (for ESPHome ingress)"
 else
     bashio::log.info "No HA Core access token configured (ESPHome tools may not work)"
+fi
+
+# ==============================================================================
+# Add-on development access acknowledgement
+# ==============================================================================
+
+printf '%s\n' "${ADDON_ACCESS_ENABLED}" > /data/.addon_access_enabled
+
+if bashio::var.true "${ADDON_ACCESS_ENABLED}"; then
+    printf 'export OPENCODE_ADDON_ACCESS_ENABLED=true\n' >> "${ENV_VARS_FILE}"
+    chmod 600 "${ENV_VARS_FILE}"
+    bashio::log.warning "Add-on folder access is enabled. OpenCode can work with /addons and /addon_configs."
+    bashio::log.warning "These folders may contain sensitive add-on configuration and should be edited carefully."
+else
+    printf 'export OPENCODE_ADDON_ACCESS_ENABLED=false\n' >> "${ENV_VARS_FILE}"
+    chmod 600 "${ENV_VARS_FILE}"
+    bashio::log.info "Add-on folder access guidance disabled. Mounted add-on folders are not advertised in the terminal."
 fi
 
 # ==============================================================================

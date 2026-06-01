@@ -8,6 +8,12 @@ This is the **beta channel** for the OpenCode add-on. It contains experimental f
 
 - **Beta baseline reset**: `1.9.0b0` is based on the current stable OpenCode add-on release and does not include beta-only feature changes yet.
 
+## Add-on Folder Access
+
+OpenCode mounts `/addons` and `/addon_configs` for Home Assistant add-on development access. Enable **Add-on Folder Guidance** in the add-on configuration and restart to show these paths in the terminal. This option updates guidance, but the mounts are static add-on metadata and are not a hard filesystem permission boundary.
+
+Treat `/addon_configs` as sensitive because it may contain configuration data for other add-ons.
+
 ## Zigbee2MQTT URL
 
 If you configure `z2m_url` for zigporter commands, use a full URL such as `http://homeassistant.local:8099`. Host/IP-only values are accepted and treated as `http://`.

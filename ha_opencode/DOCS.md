@@ -38,6 +38,7 @@ Configure the app from the **Configuration** tab in the app page.
 | Option | Default | Description |
 |--------|---------|-------------|
 | **CPU Mode** | `auto` | Controls which OpenCode binary is used. `auto` detects your CPU capabilities automatically (recommended). `baseline` forces the baseline binary for older CPUs without AVX2 support. `regular` forces the standard binary. |
+| **Enable Add-on Folder Guidance** | `false` | Shows terminal guidance for Home Assistant add-on development folders. The add-on mounts `/addons` and `/addon_configs` for development access; `/addon_configs` may contain sensitive add-on data. This option updates guidance after restart, but it is not a hard filesystem permission boundary. |
 | **Zigbee2MQTT URL** | `""` | Optional URL for Zigbee2MQTT, used by zigporter commands such as `list-z2m` and `network-map --backend z2m`. Include `http://` or `https://`, for example `http://homeassistant.local:8099`. Host/IP-only values are treated as `http://`. |
 | **Zigbee2MQTT MQTT Topic** | `zigbee2mqtt` | MQTT base topic used by Zigbee2MQTT. |
 | **Environment Variables** | `[]` | Define custom environment variables that are available to OpenCode and the terminal shell. Each entry has a `name` and `value`. Useful for provider credentials or configuration that must be set as environment variables (e.g. `AZURE_RESOURCE_NAME`, `OPENAI_API_KEY`). Changes take effect after restarting the add-on. Critical system variables (`HOME`, `PATH`, `SUPERVISOR_TOKEN`, etc.) cannot be overridden. |
@@ -843,6 +844,8 @@ OpenCode starts in the `/homeassistant` directory, which is your Home Assistant 
 - Custom components in `custom_components/`
 - And all other configuration files
 
+When add-on folder guidance is enabled, the terminal also highlights `/addons` and `/addon_configs` for Home Assistant add-on development. These folders are mounted into the container for development access. Treat `/addon_configs` as sensitive because it may contain configuration data for other add-ons.
+
 ## Customizing AI Instructions (AGENTS.md)
 
 The app creates an `AGENTS.md` file in your Home Assistant config directory (`/homeassistant/AGENTS.md`) on first install. This file contains instructions that guide how OpenCode behaves when working with your Home Assistant setup.
@@ -958,6 +961,7 @@ Your OpenCode sessions and API credentials are stored in `/data/` within the app
 ## Security Notes
 
 - This app has access to your Home Assistant configuration files (read/write)
+- This app mounts `/addons` and `/addon_configs` for add-on development access. `/addon_configs` may contain sensitive data from other add-ons.
 - This app can view system logs (Core, Supervisor, Host)
 - When MCP is enabled, OpenCode can query entities and call services
 - Access is protected by Home Assistant authentication via ingress

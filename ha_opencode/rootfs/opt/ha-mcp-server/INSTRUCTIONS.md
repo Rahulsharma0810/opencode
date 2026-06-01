@@ -20,6 +20,10 @@ You have access to the Home Assistant MCP server which provides deep integration
 4. **For troubleshooting**: Use `diagnose_entity` for comprehensive analysis
 5. **For overview**: Use `get_states` with `summarize: true` for human-readable summaries
 
+## Add-on Development Folder Access
+
+When enabled by the user, `/addons` and `/addon_configs` may be available for Home Assistant add-on development. Only inspect or modify these folders when the user explicitly asks. Treat `/addon_configs` as sensitive because it can contain configuration data for other add-ons.
+
 ## Update Management
 
 ### Firmware Updates (ESPHome, WLED, Zigbee, etc.)
