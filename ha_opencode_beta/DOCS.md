@@ -7,6 +7,7 @@ This is the **beta channel** for the OpenCode add-on. It contains experimental f
 ## Current Beta Changes
 
 - **Beta baseline reset**: `1.9.0b0` is based on the current stable OpenCode add-on release and does not include beta-only feature changes yet.
+- **Serial device access**: Selected host UART/serial devices can be mapped into the add-on for USB flashing and adapter inspection workflows. Full Supervisor `uart` and `udev` manifest flags remain disabled by default because they are static permissions, not runtime user options.
 
 ## Add-on Folder Access
 

@@ -1,7 +1,7 @@
 ---
 name: "OpenCode"
 description: "AI coding agent for editing Home Assistant configuration with deep MCP integration and LSP support"
-version: "1.9.0"
+version: "1.9.1"
 slug: "ha_opencode"
 image: "ghcr.io/magnusoverli/ha_opencode/{arch}"
 url: "https://github.com/magnusoverli/opencode"
@@ -33,10 +33,14 @@ hassio_api: true
 hassio_role: manager
 homeassistant_api: true
 
-# Security - keep permissions minimal
+# Security and hardware access - keep permissions minimal
 host_network: false
 privileged: []
 apparmor: true
+# Static Supervisor hardware mappings. Keep default-off; users can opt into
+# specific serial devices via the serial_devices option below.
+uart: false
+udev: false
 
 # User-configurable options
 options:
@@ -73,6 +77,10 @@ options:
   z2m_url: ""
   z2m_mqtt_topic: "zigbee2mqtt"
 
+  # Serial devices to map into the container (optional)
+  # Add paths such as /dev/ttyUSB0, /dev/ttyACM0, or /dev/serial/by-id/...
+  serial_devices: []
+
   # Environment variables to inject into the container
   env_vars: []
   
@@ -105,6 +113,10 @@ schema:
   # Zigbee2MQTT (optional)
   z2m_url: str?
   z2m_mqtt_topic: str?
+
+  # Serial devices (optional)
+  serial_devices:
+    - device(subsystem=tty)?
 
   # Environment variables
   env_vars:

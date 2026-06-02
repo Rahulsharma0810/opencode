@@ -72,6 +72,30 @@ else
 fi
 
 # ==============================================================================
+# Expose configured serial devices to OpenCode and shell sessions
+# Supervisor maps these devices into the container based on the device() schema.
+# ==============================================================================
+
+SERIAL_DEVICES_COUNT=$(bashio::config 'serial_devices | length' || echo "0")
+
+if [ "${SERIAL_DEVICES_COUNT}" -gt 0 ]; then
+    SERIAL_DEVICES=""
+    for i in $(seq 0 $((SERIAL_DEVICES_COUNT - 1))); do
+        SERIAL_DEVICE=$(bashio::config "serial_devices[${i}]")
+        if [ -z "${SERIAL_DEVICES}" ]; then
+            SERIAL_DEVICES="${SERIAL_DEVICE}"
+        else
+            SERIAL_DEVICES="${SERIAL_DEVICES}:${SERIAL_DEVICE}"
+        fi
+        bashio::log.info "Serial device configured: ${SERIAL_DEVICE}"
+    done
+    printf 'export OPENCODE_SERIAL_DEVICES=%q\n' "${SERIAL_DEVICES}" >> "${ENV_VARS_FILE}"
+    chmod 600 "${ENV_VARS_FILE}"
+else
+    bashio::log.info "No serial devices configured"
+fi
+
+# ==============================================================================
 # Export HA Core long-lived access token (for ESPHome ingress)
 # Appended AFTER user env vars so it survives the rm -f above.
 # ==============================================================================

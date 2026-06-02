@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Reduce memory and disk pressure by disabling OpenCode snapshots by default and ignoring noisy Home Assistant internal paths in OpenCode's file watcher.
+- **Opt-in serial device access** — added a `serial_devices` option that lets users map selected host UART/serial devices into the add-on for USB flashing and adapter inspection workflows. Supervisor `uart` and `udev` manifest flags remain disabled by default because they are static permissions, not runtime user options.
 
 ## 1.9.0b1
 
