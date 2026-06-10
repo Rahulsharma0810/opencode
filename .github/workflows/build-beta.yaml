@@ -93,6 +93,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
+      contents: write
       packages: write
 
     steps:
@@ -136,3 +137,51 @@ jobs:
           IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
           VERSION: ${{ steps.version.outputs.version }}
         run: docker buildx imagetools inspect "${IMAGE}:${VERSION}"
+
+      - name: Write release image assets
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}" > image-manifest.txt
+          {
+            echo "# Container images"
+            echo
+            echo "Published from ${GITHUB_REPOSITORY}@${GITHUB_SHA}."
+            echo
+            echo "| Purpose | Image |"
+            echo "|---------|-------|"
+            echo "| Multi-arch version tag | \`${IMAGE}:${VERSION}\` |"
+            echo "| Multi-arch latest tag | \`${IMAGE}:latest\` |"
+            echo "| Legacy amd64 alias | \`${IMAGE}/amd64:${VERSION}\` |"
+            echo "| Legacy aarch64 alias | \`${IMAGE}/aarch64:${VERSION}\` |"
+            echo
+            echo "## Manifest"
+            echo
+            echo '```text'
+            cat image-manifest.txt
+            echo '```'
+          } > container-images.md
+
+      - name: Upload image assets to GitHub Release
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          for attempt in {1..30}; do
+            if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+              gh release upload "${RELEASE_TAG}" \
+                container-images.md \
+                image-manifest.txt \
+                --clobber
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "::error::GitHub Release ${RELEASE_TAG} was not found"
+          exit 1

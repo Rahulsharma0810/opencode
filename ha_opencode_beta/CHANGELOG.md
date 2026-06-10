@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 2.0.3b2
+
+- **GitHub Release image assets** — multi-arch build workflows now attach `container-images.md` and `image-manifest.txt` to the matching GitHub Release after publishing the GHCR image manifest, making the published image references and manifest details visible from the release page.
+
 ## 2.0.3b1
 
 - **Multi-arch image publishing** — migrated the beta add-on to Home Assistant's preferred generic multi-arch image style (`ghcr.io/magnusoverli/ha_opencode_beta`) while keeping legacy arch-specific image aliases for compatibility.
