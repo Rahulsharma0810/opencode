@@ -3,8 +3,8 @@
 # (opencode-ai ships pre-compiled native binaries that require glibc)
 # Includes: S6-Overlay, Bashio, TempIO
 build_from:
-  aarch64: ghcr.io/home-assistant/aarch64-base-debian:trixie
-  amd64: ghcr.io/home-assistant/amd64-base-debian:trixie
+  aarch64: ghcr.io/home-assistant/base-debian:trixie
+  amd64: ghcr.io/home-assistant/base-debian:trixie
 args:
   # Pin versions for reproducible builds (use 'latest' for auto-updates)
   OPENCODE_VERSION: "latest"

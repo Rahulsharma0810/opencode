@@ -1,7 +1,7 @@
 ---
 build_from:
-  aarch64: ghcr.io/home-assistant/aarch64-base-debian:trixie
-  amd64: ghcr.io/home-assistant/amd64-base-debian:trixie
+  aarch64: ghcr.io/home-assistant/base-debian:trixie
+  amd64: ghcr.io/home-assistant/base-debian:trixie
 args:
   OPENCODE_VERSION: "latest"
   PPQ_PROXY_VERSION: "0.1.0"

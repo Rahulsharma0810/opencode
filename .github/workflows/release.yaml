@@ -31,9 +31,11 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           sed -i "s/^version: .*/version: \"${VERSION}\"/" ha_opencode/config.yaml
+          sed -i 's|^image: .*|image: "ghcr.io/magnusoverli/ha_opencode"|' ha_opencode/config.yaml
 
           # Check if version was updated
           grep "version:" ha_opencode/config.yaml
+          grep "image:" ha_opencode/config.yaml
 
       - name: Commit version update
         run: |

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 2.0.3b1
+
+- **Multi-arch image publishing** — migrated the beta add-on to Home Assistant's preferred generic multi-arch image style (`ghcr.io/magnusoverli/ha_opencode_beta`) while keeping legacy arch-specific image aliases for compatibility.
+- **Multi-arch Debian base image** — switched from architecture-prefixed Home Assistant Debian base images to `ghcr.io/home-assistant/base-debian:trixie`, which resolves to the same Debian Trixie amd64/arm64 platform images.
+
 ## 2.0.3b0
 
 - **PPQ private TEE models** — added an opt-in internal PPQ private-mode proxy, pinned at image build time, with a masked PPQ API key option and an OpenCode custom provider for PPQ private models. The proxy binds only to `127.0.0.1` inside the container and is not exposed through Home Assistant networking.
