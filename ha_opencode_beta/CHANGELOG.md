@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 2.0.3b7
+
+- **Web terminal clipboard fixes** — copying inside OpenCode now reaches the browser clipboard via OSC 52 support through tmux and a custom ttyd page, with a one-click fallback on plain HTTP. Plain `Ctrl+V` paste now works, and macOS users can use `Option+drag` to select text while full-screen terminal apps capture the mouse.
+
 ## 2.0.3b6
 
 - **Lower MCP server memory** — `puppeteer-core` is now loaded on first screenshot use instead of at startup, saving ~28 MB of resident memory per MCP server process when the screenshot tool is unused (the default).
