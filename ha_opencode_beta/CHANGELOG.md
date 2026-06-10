@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 2.0.3b6
+
 - **Lower MCP server memory** — `puppeteer-core` is now loaded on first screenshot use instead of at startup, saving ~28 MB of resident memory per MCP server process when the screenshot tool is unused (the default).
 
 ## 2.0.3b5
