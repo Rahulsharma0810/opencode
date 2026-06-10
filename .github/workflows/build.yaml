@@ -172,8 +172,9 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           for attempt in {1..30}; do
-            if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
               gh release upload "${RELEASE_TAG}" \
+                --repo "${GITHUB_REPOSITORY}" \
                 container-images.md \
                 image-manifest.txt \
                 --clobber
