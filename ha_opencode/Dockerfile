@@ -3,7 +3,9 @@ ARG BUILD_FROM=ghcr.io/home-assistant/base-debian:trixie
 ARG BUILD_ARCH
 
 ## Stage 1: Build hab CLI from source (pinned release)
-FROM golang:1.24-trixie AS hab-builder
+# Pinned to the build host's platform — Go cross-compiles via GOARCH below,
+# so this stage never needs to run under emulation
+FROM --platform=$BUILDPLATFORM golang:1.24-trixie AS hab-builder
 
 ARG BUILD_ARCH
 ARG HAB_VERSION=1.6.4

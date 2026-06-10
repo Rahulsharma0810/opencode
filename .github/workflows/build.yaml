@@ -19,7 +19,7 @@ env:
 jobs:
   build:
     name: Build ${{ matrix.ha_arch }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -29,8 +29,10 @@ jobs:
         include:
           - ha_arch: amd64
             platform: linux/amd64
+            runner: ubuntu-latest
           - ha_arch: aarch64
             platform: linux/arm64
+            runner: ubuntu-24.04-arm
 
     steps:
       - name: Checkout repository
@@ -48,9 +50,6 @@ jobs:
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Building version: ${VERSION}"
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
