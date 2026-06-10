@@ -13,7 +13,10 @@
 # Test infrastructure (not needed in image)
 **/test/
 **/vitest.config.*
-**/node_modules/.vitest
+
+# Dependencies are installed from package-lock at build time; the checked-in
+# node_modules include dev deps and would clobber the clean production install
+**/node_modules/
 
 # Build artifacts
 *.log

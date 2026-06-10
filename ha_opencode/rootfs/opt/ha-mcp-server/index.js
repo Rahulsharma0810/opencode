@@ -66,6 +66,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import WebSocket from "ws";
 import { readFileSync, writeFileSync, copyFileSync, unlinkSync, existsSync, mkdirSync } from "fs";
+import { createHash } from "crypto";
 import { execFile } from "child_process";
 import { dirname, join, resolve, isAbsolute, normalize } from "path";
 import { fileURLToPath } from "url";
@@ -90,7 +91,7 @@ const ESPHOME_TOKEN_ERROR = "ESPHome tools require a Long-Lived Access Token.\n\
   "To configure:\n" +
   "1. Go to your Home Assistant Profile page (click your user icon)\n" +
   "2. Scroll to Long-Lived Access Tokens and create one\n" +
-  "3. Go to Settings → Add-ons → OpenCode → Configuration\n" +
+  "3. Go to Settings â†’ Add-ons â†’ OpenCode â†’ Configuration\n" +
   "4. Paste the token into the 'access_token' field\n" +
   "5. Restart the OpenCode add-on (with ESPHome already running)";
 
@@ -100,16 +101,16 @@ const CHROMIUM_PATH = process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/bin/chromiu
 
 const SCREENSHOT_DISABLED_ERROR = "Screenshot tool is disabled.\n\n" +
   "To enable visual verification:\n" +
-  "1. Go to Settings → Add-ons → OpenCode → Configuration\n" +
+  "1. Go to Settings â†’ Add-ons â†’ OpenCode â†’ Configuration\n" +
   "2. Enable 'Screenshot tool'\n" +
-  "3. Set a Long-Lived Access Token (Profile → Long-Lived Access Tokens)\n" +
+  "3. Set a Long-Lived Access Token (Profile â†’ Long-Lived Access Tokens)\n" +
   "4. Restart the OpenCode add-on";
 
 const SCREENSHOT_TOKEN_ERROR = "Screenshot tool requires a Long-Lived Access Token.\n\n" +
   "To configure:\n" +
   "1. Go to your Home Assistant Profile page (click your user icon)\n" +
   "2. Scroll to Long-Lived Access Tokens and create one\n" +
-  "3. Go to Settings → Add-ons → OpenCode → Configuration\n" +
+  "3. Go to Settings â†’ Add-ons â†’ OpenCode â†’ Configuration\n" +
   "4. Paste the token into the 'access_token' field\n" +
   "5. Restart the OpenCode add-on";
 
@@ -156,19 +157,26 @@ function sendLog(level, logger, data) {
 // HOME ASSISTANT API HELPERS
 // ============================================================================
 
+// Default timeout for local Supervisor/HA calls; long-running operations
+// (check_config, updates) pass explicit overrides
+const API_TIMEOUT_MS = 30000;
+const CHECK_CONFIG_TIMEOUT_MS = 120000;
+const UPDATE_TIMEOUT_MS = 600000;
+
 /**
  * Call Home Assistant via Supervisor API proxy
  * Used for most endpoints that are proxied through supervisor
  */
-async function callHA(endpoint, method = "GET", body = null) {
+async function callHA(endpoint, method = "GET", body = null, timeoutMs = API_TIMEOUT_MS) {
   sendLog("debug", "ha-api", { action: "request", endpoint, method });
-  
+
   const options = {
     method,
     headers: {
       "Authorization": `Bearer ${SUPERVISOR_TOKEN}`,
       "Content-Type": "application/json",
     },
+    signal: AbortSignal.timeout(timeoutMs),
   };
 
   if (body) {
@@ -196,15 +204,16 @@ async function callHA(endpoint, method = "GET", body = null) {
  * Call Home Assistant Supervisor API directly
  * Used for add-on management, updates, jobs, and system operations
  */
-async function callSupervisor(endpoint, method = "GET", body = null) {
+async function callSupervisor(endpoint, method = "GET", body = null, timeoutMs = API_TIMEOUT_MS) {
   sendLog("debug", "supervisor-api", { action: "request", endpoint, method });
-  
+
   const options = {
     method,
     headers: {
       "Authorization": `Bearer ${SUPERVISOR_TOKEN}`,
       "Content-Type": "application/json",
     },
+    signal: AbortSignal.timeout(timeoutMs),
   };
 
   if (body) {
@@ -229,6 +238,34 @@ async function callSupervisor(endpoint, method = "GET", body = null) {
   return response.text();
 }
 
+// Short-lived cache for the full state dump â€” many tools fetch /states and
+// filter in JS; this collapses repeat fetches within a burst of agent calls
+const statesCache = { data: null, fetchedAt: 0, inflight: null };
+const STATES_CACHE_TTL = 3000;
+
+async function getCachedStates() {
+  const now = Date.now();
+  if (statesCache.data && (now - statesCache.fetchedAt) < STATES_CACHE_TTL) {
+    return statesCache.data;
+  }
+  if (statesCache.inflight) {
+    return statesCache.inflight;
+  }
+  statesCache.inflight = callHA("/states")
+    .then((states) => {
+      statesCache.data = states;
+      statesCache.fetchedAt = Date.now();
+      return states;
+    })
+    .finally(() => { statesCache.inflight = null; });
+  return statesCache.inflight;
+}
+
+function invalidateStatesCache() {
+  statesCache.data = null;
+  statesCache.fetchedAt = 0;
+}
+
 // ============================================================================
 // HA CORE URL DISCOVERY
 // ============================================================================
@@ -242,7 +279,15 @@ async function callSupervisor(endpoint, method = "GET", body = null) {
  * @returns {Promise<string>} The HA Core URL (e.g. "http://192.168.1.100:8123")
  * @throws {Error} If the URL cannot be determined
  */
+// The HA Core URL changes essentially never â€” cache it across calls
+const haCoreUrlCache = { url: null, fetchedAt: 0 };
+const HA_CORE_URL_TTL = 600000; // 10 minutes
+
 async function discoverHACoreUrl() {
+  if (haCoreUrlCache.url && (Date.now() - haCoreUrlCache.fetchedAt) < HA_CORE_URL_TTL) {
+    return haCoreUrlCache.url;
+  }
+
   let haConfig;
   try {
     haConfig = await callHA("/config");
@@ -253,7 +298,7 @@ async function discoverHACoreUrl() {
   let haCoreUrl = (haConfig.internal_url || haConfig.external_url || "").replace(/\/+$/, "");
 
   if (!haCoreUrl) {
-    // internal_url is "automatic" (null) — discover from Supervisor APIs
+    // internal_url is "automatic" (null) â€” discover from Supervisor APIs
     try {
       const [coreInfo, networkInfo] = await Promise.all([
         callSupervisor("/core/info"),
@@ -284,12 +329,14 @@ async function discoverHACoreUrl() {
   if (!haCoreUrl) {
     throw new Error(
       "Could not determine HA Core URL. " +
-      "Set internal_url in Settings → System → Network, " +
+      "Set internal_url in Settings â†’ System â†’ Network, " +
       "or ensure the host has a connected network interface."
     );
   }
 
   sendLog("debug", "ha-core-url", { action: "discovered", url: haCoreUrl });
+  haCoreUrlCache.url = haCoreUrl;
+  haCoreUrlCache.fetchedAt = Date.now();
   return haCoreUrl;
 }
 
@@ -303,11 +350,11 @@ async function discoverHACoreUrl() {
  * Uses three complementary auth strategies to ensure the HA frontend
  * authenticates correctly regardless of frontend version:
  *
- *   1. localStorage injection — sets hassTokens so the frontend's auth
+ *   1. localStorage injection â€” sets hassTokens so the frontend's auth
  *      module finds a valid session on startup
- *   2. WebSocket monkey-patch — intercepts the auth_required handshake
+ *   2. WebSocket monkey-patch â€” intercepts the auth_required handshake
  *      and responds with the LLAT before the frontend's own handler
- *   3. HTTP request interception — adds Authorization header to all
+ *   3. HTTP request interception â€” adds Authorization header to all
  *      requests to the HA server (REST API fallback)
  *
  * @param {string} haCoreUrl - HA Core base URL (e.g. "http://192.168.1.100:8123")
@@ -319,10 +366,21 @@ async function discoverHACoreUrl() {
  * @param {boolean} [options.fullPage=false] - Capture full scrollable page
  * @returns {Promise<string>} Base64-encoded PNG screenshot
  */
-async function takeScreenshot(haCoreUrl, urlPath, options = {}) {
-  const { width = 1280, height = 720, waitSeconds = 3, fullPage = false } = options;
+// Chromium launch dominates screenshot latency (1-4 s on add-on hardware) â€”
+// keep one browser alive across calls and close it after an idle period
+let sharedBrowser = null;
+let browserIdleTimer = null;
+const BROWSER_IDLE_MS = 120000;
 
-  const browser = await puppeteer.launch({
+async function getSharedBrowser() {
+  if (browserIdleTimer) {
+    clearTimeout(browserIdleTimer);
+    browserIdleTimer = null;
+  }
+  if (sharedBrowser?.connected) {
+    return sharedBrowser;
+  }
+  sharedBrowser = await puppeteer.launch({
     executablePath: CHROMIUM_PATH,
     headless: "new",
     args: [
@@ -334,12 +392,34 @@ async function takeScreenshot(haCoreUrl, urlPath, options = {}) {
       "--disable-extensions",
     ],
   });
+  return sharedBrowser;
+}
+
+function scheduleBrowserClose() {
+  if (browserIdleTimer) clearTimeout(browserIdleTimer);
+  browserIdleTimer = setTimeout(() => {
+    const browser = sharedBrowser;
+    sharedBrowser = null;
+    browserIdleTimer = null;
+    if (browser) {
+      browser.close().catch(() => {});
+    }
+  }, BROWSER_IDLE_MS);
+  // Don't keep the process alive just for the idle close
+  browserIdleTimer.unref?.();
+}
+
+async function takeScreenshot(haCoreUrl, urlPath, options = {}) {
+  const { width = 1280, height = 720, waitSeconds = 3, fullPage = false } = options;
+
+  const browser = await getSharedBrowser();
+  let page;
 
   try {
-    const page = await browser.newPage();
+    page = await browser.newPage();
     await page.setViewport({ width, height });
 
-    // ── Auth Strategy 1: localStorage tokens ──────────────────────────
+    // â”€â”€ Auth Strategy 1: localStorage tokens â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // The HA frontend reads "hassTokens" from localStorage on startup.
     // We inject a token entry with a non-empty refresh_token (empty string
     // is falsy and causes the auth module to reject the token) and a
@@ -357,11 +437,11 @@ async function takeScreenshot(haCoreUrl, urlPath, options = {}) {
           expires: Date.now() + 1800000,
         }));
       } catch (e) {
-        // localStorage may be unavailable in rare cases — fall through
+        // localStorage may be unavailable in rare cases â€” fall through
         // to the other auth strategies
       }
 
-      // ── Auth Strategy 2: WebSocket interceptor ────────────────────
+      // â”€â”€ Auth Strategy 2: WebSocket interceptor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       // Monkey-patch the WebSocket constructor so that when the HA
       // frontend opens /api/websocket, our listener auto-responds to
       // the auth_required handshake with the LLAT.  This covers cases
@@ -398,7 +478,7 @@ async function takeScreenshot(haCoreUrl, urlPath, options = {}) {
       window.WebSocket.CLOSED = _WebSocket.CLOSED;
     }, { hassUrl: haCoreUrl, token: HA_ACCESS_TOKEN });
 
-    // ── Auth Strategy 3: HTTP request interception ────────────────────
+    // â”€â”€ Auth Strategy 3: HTTP request interception â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Add the Authorization header to every request targeting the HA
     // server.  External requests (fonts, map tiles, etc.) are left
     // untouched so we don't leak the token to third parties.
@@ -452,7 +532,10 @@ async function takeScreenshot(haCoreUrl, urlPath, options = {}) {
 
     return screenshotBuffer;
   } finally {
-    await browser.close();
+    if (page) {
+      await page.close().catch(() => {});
+    }
+    scheduleBrowserClose();
   }
 }
 
@@ -497,6 +580,11 @@ async function discoverESPHome() {
   }
 
   try {
+    // Steps 1 and 4 are independent â€” start the HA config fetch now and
+    // consume it after the addon checks
+    const haConfigPromise = callHA("/config");
+    haConfigPromise.catch(() => {});
+
     // Step 1: Find ESPHome addon
     let addonsInfo;
     try {
@@ -550,7 +638,7 @@ async function discoverESPHome() {
     if (!HA_ACCESS_TOKEN) {
       step("access_token", "error", "HA_ACCESS_TOKEN env var is not set");
       return { ok: false, error: "ESPHome ingress requires a long-lived access token. " +
-        "Create one at Profile → Long-Lived Access Tokens in the HA UI, " +
+        "Create one at Profile â†’ Long-Lived Access Tokens in the HA UI, " +
         "then paste it into the addon's 'access_token' configuration option.", diagnostics: diag };
     }
     step("access_token", "ok");
@@ -559,7 +647,7 @@ async function discoverESPHome() {
     let haCoreUrl;
     let haConfig;
     try {
-      haConfig = await callHA("/config");
+      haConfig = await haConfigPromise;
       diag.internalUrl = haConfig.internal_url || null;
       diag.externalUrl = haConfig.external_url || null;
       step("ha_config", "ok", { internal_url: diag.internalUrl, external_url: diag.externalUrl });
@@ -573,7 +661,7 @@ async function discoverESPHome() {
     if (haCoreUrl) {
       diag.urlSource = "ha_config";
     } else {
-      // internal_url is "automatic" (null) — discover from Supervisor APIs
+      // internal_url is "automatic" (null) â€” discover from Supervisor APIs
       step("url_fallback", "started", "internal_url and external_url are both null, trying network discovery");
       try {
         const [coreInfo, networkInfo] = await Promise.all([
@@ -621,7 +709,7 @@ async function discoverESPHome() {
     
     if (!haCoreUrl) {
       return { ok: false, error: "Could not determine HA Core URL. " +
-        "Set internal_url in Settings → System → Network, " +
+        "Set internal_url in Settings â†’ System â†’ Network, " +
         "or ensure the host has a connected network interface.", diagnostics: diag };
     }
     step("ha_core_url", "ok", { url: haCoreUrl, source: diag.urlSource });
@@ -673,9 +761,31 @@ async function discoverESPHome() {
   }
 }
 
+// Full discovery costs 4-6 round trips plus a WebSocket handshake per call;
+// the slug, ingress entry, HA URL, and ingress session are all stable, so
+// cache the successful result across a typical list â†’ compile â†’ upload run
+let esphomeCache = { result: null, fetchedAt: 0 };
+const ESPHOME_CACHE_TTL = 300000; // 5 minutes â€” well within ingress session lifetime
+
+async function getESPHomeConnection() {
+  const now = Date.now();
+  if (esphomeCache.result?.ok && (now - esphomeCache.fetchedAt) < ESPHOME_CACHE_TTL) {
+    return esphomeCache.result;
+  }
+  const result = await discoverESPHome();
+  if (result.ok) {
+    esphomeCache = { result, fetchedAt: Date.now() };
+  }
+  return result;
+}
+
+function invalidateESPHomeCache() {
+  esphomeCache = { result: null, fetchedAt: 0 };
+}
+
 /**
  * Create an ingress session via HA Core's WebSocket API.
- * This is the ONLY method that works — REST-based session creation is rejected
+ * This is the ONLY method that works â€” REST-based session creation is rejected
  * by the Supervisor regardless of token type.  The WebSocket `supervisor/api`
  * command lets HA Core make the Supervisor call with its own credentials.
  *
@@ -857,8 +967,11 @@ async function getESPHomeDevices(esphomeUrl, ingressSession = null) {
   }
   const url = `${esphomeUrl}/devices`;
   sendLog("debug", "esphome", { action: "get_devices", url, hasSession: !!ingressSession, hasToken: !!HA_ACCESS_TOKEN });
-  const response = await fetch(url, { headers });
+  const response = await fetch(url, { headers, signal: AbortSignal.timeout(API_TIMEOUT_MS) });
   if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      invalidateESPHomeCache();
+    }
     let body = "";
     try { body = await response.text(); } catch (_) {}
     const detail = `HTTP ${response.status} from ${url}` +
@@ -1147,8 +1260,8 @@ const SCHEMAS = {
 /**
  * Get entity relationships
  */
-async function getEntityRelationships(entityId) {
-  const states = await callHA("/states");
+async function getEntityRelationships(entityId, prefetchedStates = null) {
+  const states = prefetchedStates || await getCachedStates();
   const entity = states.find(s => s.entity_id === entityId);
   
   if (!entity) {
@@ -1200,6 +1313,7 @@ async function fetchUrl(url) {
         "User-Agent": "HomeAssistant-MCP-Server/2.1.0",
         "Accept": "text/html,application/xhtml+xml,text/plain",
       },
+      signal: AbortSignal.timeout(15000),
     });
     
     if (!response.ok) {
@@ -1211,6 +1325,20 @@ async function fetchUrl(url) {
     sendLog("error", "docs", { action: "fetch_error", url, error: error.message });
     throw error;
   }
+}
+
+// Parsed documentation cache â€” agents frequently re-request the same page,
+// and each fetch is ~1 MB of HTML plus a heavy regex parsing pass
+const docsCache = new Map();
+const DOCS_CACHE_TTL = 3600000; // 1 hour
+
+function getCachedDoc(key) {
+  const hit = docsCache.get(key);
+  return hit && (Date.now() - hit.fetchedAt) < DOCS_CACHE_TTL ? hit.data : null;
+}
+
+function setCachedDoc(key, data) {
+  docsCache.set(key, { data, fetchedAt: Date.now() });
 }
 
 /**
@@ -1254,11 +1382,13 @@ const HA_ALERTS_URL = "https://alerts.home-assistant.io/alerts.json";
  * Cache for dynamically loaded data with TTL.
  */
 const dynamicCache = {
-  patterns: { data: null, fetchedAt: 0 },
-  alerts: { data: null, fetchedAt: 0 },
-  repairs: { data: null, fetchedAt: 0 },
+  patterns: { data: null, fetchedAt: 0, lastAttemptAt: 0 },
+  alerts: { data: null, fetchedAt: 0, lastAttemptAt: 0 },
+  repairs: { data: null, fetchedAt: 0, lastAttemptAt: 0 },
 };
 const DYNAMIC_CACHE_TTL = 3600000; // 1 hour
+// Back off failed fetches so offline installs don't pay a full timeout on every call
+const DYNAMIC_CACHE_RETRY_TTL = 600000; // 10 minutes
 
 /**
  * Fetch the latest deprecation patterns from our GitHub repo.
@@ -1269,6 +1399,10 @@ async function fetchRemoteDeprecationPatterns() {
   if (dynamicCache.patterns.data && (now - dynamicCache.patterns.fetchedAt) < DYNAMIC_CACHE_TTL) {
     return dynamicCache.patterns.data;
   }
+  if ((now - dynamicCache.patterns.lastAttemptAt) < DYNAMIC_CACHE_RETRY_TTL) {
+    return dynamicCache.patterns.data;
+  }
+  dynamicCache.patterns.lastAttemptAt = now;
 
   try {
     sendLog("debug", "patterns", { action: "fetch_remote", url: GITHUB_PATTERNS_URL });
@@ -1311,6 +1445,10 @@ async function fetchHAAlerts() {
   if (dynamicCache.alerts.data && (now - dynamicCache.alerts.fetchedAt) < DYNAMIC_CACHE_TTL) {
     return dynamicCache.alerts.data;
   }
+  if ((now - dynamicCache.alerts.lastAttemptAt) < DYNAMIC_CACHE_RETRY_TTL) {
+    return dynamicCache.alerts.data || [];
+  }
+  dynamicCache.alerts.lastAttemptAt = now;
 
   try {
     sendLog("debug", "alerts", { action: "fetch", url: HA_ALERTS_URL });
@@ -1343,6 +1481,10 @@ async function fetchHARepairs() {
   if (dynamicCache.repairs.data && (now - dynamicCache.repairs.fetchedAt) < DYNAMIC_CACHE_TTL) {
     return dynamicCache.repairs.data;
   }
+  if ((now - dynamicCache.repairs.lastAttemptAt) < DYNAMIC_CACHE_RETRY_TTL) {
+    return dynamicCache.repairs.data || [];
+  }
+  dynamicCache.repairs.lastAttemptAt = now;
 
   return new Promise((resolve) => {
     const wsUrl = "ws://supervisor/core/websocket";
@@ -1430,6 +1572,73 @@ async function fetchHARepairs() {
 }
 
 /**
+ * Run a single HA WebSocket API command (auth, send, close).
+ * Used for registry dumps that have no REST equivalent.
+ */
+function callHAWebSocketCommand(commandType, timeoutMs = 5000) {
+  return new Promise((promiseResolve, promiseReject) => {
+    let settled = false;
+    const settle = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      try { ws.close(); } catch (_) {}
+      fn(value);
+    };
+    const timeout = setTimeout(() => {
+      settle(promiseReject, new Error(`WebSocket command '${commandType}' timed out`));
+    }, timeoutMs);
+
+    let ws;
+    try {
+      ws = new WebSocket("ws://supervisor/core/websocket");
+    } catch (error) {
+      clearTimeout(timeout);
+      promiseReject(error);
+      return;
+    }
+
+    ws.on("message", (data) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === "auth_required") {
+          ws.send(JSON.stringify({ type: "auth", access_token: SUPERVISOR_TOKEN }));
+        } else if (msg.type === "auth_ok") {
+          ws.send(JSON.stringify({ id: 1, type: commandType }));
+        } else if (msg.type === "auth_invalid") {
+          settle(promiseReject, new Error("WebSocket authentication failed"));
+        } else if (msg.type === "result") {
+          if (msg.success) {
+            settle(promiseResolve, msg.result);
+          } else {
+            settle(promiseReject, new Error(msg.error?.message || `WebSocket command '${commandType}' failed`));
+          }
+        }
+      } catch (_) { /* ignore parse errors, wait for timeout */ }
+    });
+
+    ws.on("error", (error) => {
+      settle(promiseReject, error);
+    });
+  });
+}
+
+// Area/device registries change rarely; cache them to avoid a WS round trip per call
+const registryCache = new Map();
+const REGISTRY_CACHE_TTL = 300000; // 5 minutes
+
+async function getRegistry(commandType) {
+  const cached = registryCache.get(commandType);
+  const now = Date.now();
+  if (cached && (now - cached.fetchedAt) < REGISTRY_CACHE_TTL) {
+    return cached.data;
+  }
+  const data = await callHAWebSocketCommand(commandType);
+  registryCache.set(commandType, { data, fetchedAt: now });
+  return data;
+}
+
+/**
  * Get the best available deprecation patterns.
  * Tries remote (GitHub) first, falls back to local bundled patterns.
  * This is called lazily on first use, not at module load time.
@@ -1500,10 +1709,14 @@ async function checkConfigForDeprecations(yamlConfig, integration = null) {
   const warnings = [];
   const suggestions = [];
   let deprecated = false;
-  
+
   // Get the best available patterns (tries remote/cached, falls back to local)
-  const patterns = await getDeprecationPatterns();
-  
+  // and fetch integration alerts concurrently
+  const [patterns, alerts] = await Promise.all([
+    getDeprecationPatterns(),
+    integration ? getAlertsForIntegration(integration).catch(() => []) : Promise.resolve([]),
+  ]);
+
   for (const pattern of patterns) {
     // Skip patterns not relevant to the specified integration
     if (integration && pattern.integration && pattern.integration !== integration) {
@@ -1526,15 +1739,10 @@ async function checkConfigForDeprecations(yamlConfig, integration = null) {
   }
   
   // Check HA alerts for the specified integration
-  if (integration) {
-    try {
-      const alerts = await getAlertsForIntegration(integration);
-      for (const alert of alerts) {
-        warnings.push(`[HA ALERT] ${alert.title || alert.id}: Known issue affecting '${integration}'. See: ${alert.alert_url || ""}`);
-      }
-    } catch (_) { /* non-critical */ }
+  for (const alert of alerts) {
+    warnings.push(`[HA ALERT] ${alert.title || alert.id}: Known issue affecting '${integration}'. See: ${alert.alert_url || ""}`);
   }
-  
+
   return { deprecated, warnings, suggestions };
 }
 
@@ -1569,36 +1777,59 @@ async function extractAndValidateTemplates(yamlContent) {
   const contextVars = [
     "trigger.", "this.", "context.", "wait.", "repeat.", "response.",
   ];
-  
-  for (const template of templates) {
-    const hasContextVars = contextVars.some(v => template.includes(v));
-    
-    if (hasContextVars) {
-      results.push({
-        template: template.substring(0, 100) + (template.length > 100 ? "..." : ""),
+
+  const truncate = (t) => t.substring(0, 100) + (t.length > 100 ? "..." : "");
+
+  const validateOne = async (template) => {
+    if (contextVars.some(v => template.includes(v))) {
+      return {
+        template: truncate(template),
         status: "skipped",
         reason: "Contains runtime context variables (trigger/this/wait/repeat) that cannot be validated statically.",
-      });
-      continue;
+      };
     }
-    
+
     try {
       const rendered = await callHA("/template", "POST", { template });
-      results.push({
-        template: template.substring(0, 100) + (template.length > 100 ? "..." : ""),
+      return {
+        template: truncate(template),
         status: "valid",
         result: String(rendered).substring(0, 200),
-      });
+      };
     } catch (error) {
-      results.push({
-        template: template.substring(0, 100) + (template.length > 100 ? "..." : ""),
+      return {
+        template: truncate(template),
         status: "error",
         error: error.message,
-      });
+      };
     }
+  };
+
+  // Validate concurrently in small batches to avoid hammering HA core
+  const queue = [...templates];
+  const batchSize = 5;
+  for (let i = 0; i < queue.length; i += batchSize) {
+    results.push(...await Promise.all(queue.slice(i, i + batchSize).map(validateOne)));
   }
-  
+
   return results;
+}
+
+// Content-validation results are memoized briefly so the recommended
+// dry-run â†’ write workflow doesn't re-validate identical content twice
+const validationMemo = new Map();
+const VALIDATION_MEMO_TTL = 60000;
+
+function getValidationMemo(key) {
+  const hit = validationMemo.get(key);
+  return hit && (Date.now() - hit.at) < VALIDATION_MEMO_TTL ? hit.data : null;
+}
+
+function setValidationMemo(key, data) {
+  if (validationMemo.size >= 10) {
+    validationMemo.delete(validationMemo.keys().next().value);
+  }
+  validationMemo.set(key, { data, at: Date.now() });
 }
 
 /**
@@ -1808,7 +2039,7 @@ const TOOLS = [
         },
         minimal: {
           type: "boolean",
-          description: "If true, returns minimal response (faster, less data)",
+          description: "Defaults to true (faster, less data). Set false to include full attribute payloads.",
         },
       },
       required: ["entity_id"],
@@ -2087,7 +2318,7 @@ const TOOLS = [
   {
     name: "write_config_safe",
     title: "Safe Config Writer",
-    description: "Write YAML configuration to a file with automatic validation and content protection. Checks for deprecations, validates Jinja2 templates through HA's engine, verifies structural correctness, and runs HA's full config check. If validation fails, the original file is restored and errors are returned for correction. IMPORTANT: This tool blocks writes that would accidentally reduce content — removing list entries, dropping top-level keys, or significantly shrinking the file. Always read the existing file first and include all existing content in your write. Use dry_run=true to validate without writing.",
+    description: "Write YAML configuration to a file with automatic validation and content protection. Checks for deprecations, validates Jinja2 templates through HA's engine, verifies structural correctness, and runs HA's full config check. If validation fails, the original file is restored and errors are returned for correction. IMPORTANT: This tool blocks writes that would accidentally reduce content â€” removing list entries, dropping top-level keys, or significantly shrinking the file. Always read the existing file first and include all existing content in your write. Use dry_run=true to validate without writing.",
     inputSchema: {
       type: "object",
       properties: {
@@ -2604,31 +2835,38 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           });
         }
         
-        let states = await callHA("/states");
+        let states = await getCachedStates();
         if (args?.domain) {
           states = states.filter((s) => s.entity_id.startsWith(`${args.domain}.`));
         }
-        
+
         if (args?.summarize) {
           const summary = generateStateSummary(states);
           return makeCompatibleResponse({
             content: [createTextContent(summary, { audience: ["user", "assistant"], priority: 0.9 })],
           });
         }
-        
+
         const simplified = states.map((s) => ({
           entity_id: s.entity_id,
           state: s.state,
           friendly_name: s.attributes?.friendly_name,
           device_class: s.attributes?.device_class,
         }));
+        // Unfiltered dumps on large installs waste tokens; cap and point at the filters
+        const CAP = 500;
+        const truncated = !args?.domain && simplified.length > CAP;
+        const payload = truncated
+          ? `Showing ${CAP} of ${simplified.length} entities (use domain or summarize to narrow):\n` +
+            JSON.stringify(simplified.slice(0, CAP))
+          : JSON.stringify(simplified);
         return makeCompatibleResponse({
-          content: [createTextContent(JSON.stringify(simplified, null, 2), { audience: ["assistant"], priority: 0.7 })],
+          content: [createTextContent(payload, { audience: ["assistant"], priority: 0.7 })],
         });
       }
 
       case "search_entities": {
-        const states = await callHA("/states");
+        const states = await getCachedStates();
         const results = searchEntities(states, args.query);
         
         return makeCompatibleResponse({
@@ -2660,7 +2898,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           Object.assign(payload, target);
         }
         const result = await callHA(`/services/${domain}/${service}`, "POST", payload);
-        
+        invalidateStatesCache();
+
         return makeCompatibleResponse({
           content: [
             createTextContent(
@@ -2672,12 +2911,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "get_services": {
-        let services = await callHA("/services");
+        const services = await callHA("/services");
         if (args?.domain) {
-          services = services.filter((s) => s.domain === args.domain);
+          const filtered = services.filter((s) => s.domain === args.domain);
+          return makeCompatibleResponse({
+            content: [createTextContent(JSON.stringify(filtered, null, 2), { audience: ["assistant"], priority: 0.6 })],
+          });
         }
+        // Full catalog with field docs is enormous; unfiltered calls get the
+        // domain/service index and a hint to re-query with a domain
+        const index = services.map((s) => ({
+          domain: s.domain,
+          services: Object.keys(s.services || {}),
+        }));
         return makeCompatibleResponse({
-          content: [createTextContent(JSON.stringify(services, null, 2), { audience: ["assistant"], priority: 0.6 })],
+          content: [createTextContent(
+            `Service index (${index.length} domains). Pass domain for full schemas.\n` +
+            JSON.stringify(index),
+            { audience: ["assistant"], priority: 0.6 }
+          )],
         });
       }
 
@@ -2687,14 +2939,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const startTime = args.start_time || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
         const params = new URLSearchParams({ filter_entity_id: entityId });
         if (args.end_time) params.append("end_time", args.end_time);
-        if (args.minimal) {
+        // Full attribute payloads are opt-in; minimal keeps chatty sensors cheap
+        if (args.minimal !== false) {
           params.append("minimal_response", "true");
           params.append("no_attributes", "true");
         }
-        
+
         const history = await callHA(`/history/period/${encodeURIComponent(startTime)}?${params}`);
         return makeCompatibleResponse({
-          content: [createTextContent(JSON.stringify(history, null, 2), { audience: ["assistant"], priority: 0.7 })],
+          content: [createTextContent(JSON.stringify(history), { audience: ["assistant"], priority: 0.7 })],
         });
       }
 
@@ -2703,10 +2956,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const params = new URLSearchParams();
         if (args.entity_id) params.append("entity", args.entity_id);
         if (args.end_time) params.append("end_time", args.end_time);
-        
+
         const logbook = await callHA(`/logbook/${encodeURIComponent(startTime)}?${params}`);
         return makeCompatibleResponse({
-          content: [createTextContent(JSON.stringify(logbook, null, 2), { audience: ["assistant"], priority: 0.7 })],
+          content: [createTextContent(JSON.stringify(logbook), { audience: ["assistant"], priority: 0.7 })],
         });
       }
 
@@ -2719,34 +2972,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "get_areas": {
-        // Use namespace to properly accumulate values in Jinja2 loop
-        const result = await callHA("/template", "POST", {
-          template: "{% set ns = namespace(areas=[]) %}{% for area in areas() %}{% set ns.areas = ns.areas + [{'id': area, 'name': area_name(area)}] %}{% endfor %}{{ ns.areas | tojson }}"
-        });
+        const areas = await getRegistry("config/area_registry/list");
+        const result = JSON.stringify(areas.map((a) => ({ id: a.area_id, name: a.name })));
         return makeCompatibleResponse({
           content: [createTextContent(result, { audience: ["assistant"], priority: 0.7 })],
         });
       }
 
       case "get_devices": {
-        // Get devices by extracting unique device_ids from all entity states
-        // Then use device_attr() to get device details
-        let template;
+        let devices = await getRegistry("config/device_registry/list");
         if (args?.area_id) {
-          // Get devices for a specific area
-          template = `{% set ns = namespace(devices=[]) %}{% for device_id in area_devices('${args.area_id}') %}{% set ns.devices = ns.devices + [{'id': device_id, 'name': device_attr(device_id, 'name'), 'manufacturer': device_attr(device_id, 'manufacturer'), 'model': device_attr(device_id, 'model')}] %}{% endfor %}{{ ns.devices | tojson }}`;
-        } else {
-          // Get all devices by iterating through states and collecting unique device_ids
-          template = `{% set ns = namespace(device_ids=[]) %}{% for state in states %}{% if device_id(state.entity_id) and device_id(state.entity_id) not in ns.device_ids %}{% set ns.device_ids = ns.device_ids + [device_id(state.entity_id)] %}{% endif %}{% endfor %}{% set ns2 = namespace(devices=[]) %}{% for did in ns.device_ids %}{% set ns2.devices = ns2.devices + [{'id': did, 'name': device_attr(did, 'name'), 'manufacturer': device_attr(did, 'manufacturer'), 'model': device_attr(did, 'model'), 'area': device_attr(did, 'area_id')}] %}{% endfor %}{{ ns2.devices | tojson }}`;
+          devices = devices.filter((d) => d.area_id === args.area_id);
         }
-        const result = await callHA("/template", "POST", { template });
+        const result = JSON.stringify(devices.map((d) => ({
+          id: d.id,
+          name: d.name_by_user || d.name,
+          manufacturer: d.manufacturer,
+          model: d.model,
+          ...(args?.area_id ? {} : { area: d.area_id }),
+        })));
         return makeCompatibleResponse({
           content: [createTextContent(result, { audience: ["assistant"], priority: 0.6 })],
         });
       }
 
       case "validate_config": {
-        const result = await callHA("/config/core/check_config", "POST");
+        const result = await callHA("/config/core/check_config", "POST", null, CHECK_CONFIG_TIMEOUT_MS);
         return makeCompatibleResponse({
           content: [
             createTextContent(
@@ -2758,8 +3009,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "get_error_log": {
-        // Use HA Core API via Supervisor proxy - correct endpoint path
-        const log = await callHA("/core/api/error_log");
+        // Supervisor proxies http://supervisor/core/api/* to HA's /api/*
+        const log = await callHA("/error_log");
         const lines = args?.lines || 100;
         const logLines = log.split("\n").slice(-lines).join("\n");
         return makeCompatibleResponse({
@@ -2806,7 +3057,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // === INTELLIGENCE ===
       case "detect_anomalies": {
-        let states = await callHA("/states");
+        let states = await getCachedStates();
         if (args?.domain) {
           states = states.filter((s) => s.entity_id.startsWith(`${args.domain}.`));
         }
@@ -2833,7 +3084,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "get_suggestions": {
-        const states = await callHA("/states");
+        const states = await getCachedStates();
         const suggestions = generateSuggestions(states);
         
         if (suggestions.length === 0) {
@@ -2858,32 +3109,40 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
         
         try {
-          const state = await callHA(`/states/${entity_id}`);
-          diagnostics.current_state = state;
-          diagnostics.checks.push({ check: "Current State", status: "ok", details: state.state });
-          
-          if (state.state === "unavailable" || state.state === "unknown") {
-            diagnostics.checks.push({ 
-              check: "Availability", 
-              status: "warning", 
-              details: `Entity is ${state.state}. Check device connectivity.` 
-            });
-          }
-          
-          const relationships = await getEntityRelationships(entity_id);
-          diagnostics.relationships = relationships;
-          diagnostics.checks.push({ 
-            check: "Relationships", 
-            status: "ok", 
-            details: `Found ${relationships.related_entities?.length || 0} related entities` 
-          });
-          
           const startTime = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
           const params = new URLSearchParams({
             filter_entity_id: entity_id,
             minimal_response: "true",
           });
-          const history = await callHA(`/history/period/${encodeURIComponent(startTime)}?${params}`);
+          // One states fetch serves both the entity lookup and relationships;
+          // history runs concurrently
+          const [states, history] = await Promise.all([
+            getCachedStates(),
+            callHA(`/history/period/${encodeURIComponent(startTime)}?${params}`),
+          ]);
+
+          const state = states.find(s => s.entity_id === entity_id);
+          if (!state) {
+            throw new Error(`Entity ${entity_id} not found`);
+          }
+          diagnostics.current_state = state;
+          diagnostics.checks.push({ check: "Current State", status: "ok", details: state.state });
+
+          if (state.state === "unavailable" || state.state === "unknown") {
+            diagnostics.checks.push({
+              check: "Availability",
+              status: "warning",
+              details: `Entity is ${state.state}. Check device connectivity.`
+            });
+          }
+
+          const relationships = await getEntityRelationships(entity_id, states);
+          diagnostics.relationships = relationships;
+          diagnostics.checks.push({
+            check: "Relationships",
+            status: "ok",
+            details: `Found ${relationships.related_entities?.length || 0} related entities`
+          });
           
           if (history && history[0]) {
             const stateChanges = history[0].length;
@@ -2928,58 +3187,60 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         sendLog("info", "docs", { action: "get_integration_docs", integration, section });
         
         const url = `${HA_INTEGRATIONS_URL}/${integration}/`;
+
+        // Resolve the HA version while the docs page is fetched/parsed
+        const versionPromise = callHA("/config")
+          .then((config) => config.version || "unknown")
+          .catch((e) => {
+            sendLog("warning", "docs", { action: "version_fetch_failed", error: e.message });
+            return "unknown";
+          });
         let haVersion = "unknown";
-        
-        // Get current HA version
+
         try {
-          const config = await callHA("/config");
-          haVersion = config.version || "unknown";
-        } catch (e) {
-          sendLog("warning", "docs", { action: "version_fetch_failed", error: e.message });
-        }
-        
-        try {
-          const html = await fetchUrl(url);
-          const { title, description, content } = extractContentFromHtml(html);
-          
-          let resultContent = content;
-          const examples = extractYamlExamples(content);
-          
-          // Filter to configuration section if requested
-          if (section === "configuration") {
-            const configSection = extractConfigurationSection(content);
-            if (configSection) {
-              resultContent = configSection;
+          const cacheKey = `integration-docs:${integration}:${section}`;
+          let parsed = getCachedDoc(cacheKey);
+          if (!parsed) {
+            const html = await fetchUrl(url);
+            const { title, description, content } = extractContentFromHtml(html);
+
+            let resultContent = content;
+            const examples = extractYamlExamples(content);
+
+            // Filter to configuration section if requested
+            if (section === "configuration") {
+              const configSection = extractConfigurationSection(content);
+              if (configSection) {
+                resultContent = configSection;
+              }
+            } else if (section === "examples" && examples.length > 0) {
+              resultContent = "## YAML Examples\n\n" + examples.map((ex, i) => `### Example ${i + 1}\n\`\`\`yaml\n${ex}\n\`\`\``).join("\n\n");
             }
-          } else if (section === "examples" && examples.length > 0) {
-            resultContent = "## YAML Examples\n\n" + examples.map((ex, i) => `### Example ${i + 1}\n\`\`\`yaml\n${ex}\n\`\`\``).join("\n\n");
+
+            parsed = {
+              title: title || integration,
+              resultContent: resultContent.substring(0, 15000), // Limit content size
+              fetched_at: new Date().toISOString(),
+            };
+            setCachedDoc(cacheKey, parsed);
           }
-          
-          const result = {
-            integration,
-            url,
-            title: title || integration,
-            description: description || "",
-            ha_version: haVersion,
-            fetched_at: new Date().toISOString(),
-            content: resultContent.substring(0, 15000), // Limit content size
-            yaml_examples: examples.slice(0, 5), // Include up to 5 examples
-          };
-          
+          haVersion = await versionPromise;
+
           return makeCompatibleResponse({
             content: [
               createTextContent(
-                `# ${result.title}\n\n` +
+                `# ${parsed.title}\n\n` +
                 `**Integration:** ${integration}\n` +
                 `**Docs URL:** ${url}\n` +
                 `**Your HA Version:** ${haVersion}\n` +
-                `**Fetched:** ${result.fetched_at}\n\n` +
-                `---\n\n${resultContent.substring(0, 15000)}`,
+                `**Fetched:** ${parsed.fetched_at}\n\n` +
+                `---\n\n${parsed.resultContent}`,
                 { audience: ["assistant"], priority: 0.9 }
               ),
             ],
           });
         } catch (error) {
+          haVersion = await versionPromise;
           // Provide helpful fallback if docs can't be fetched
           return makeCompatibleResponse({
             content: [
@@ -3102,19 +3363,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Try to fetch the release notes page for additional context
         let releaseNotesContent = "";
         const targetVersion = version || haVersion.split(".").slice(0, 2).join(".");
-        
-        try {
-          const releaseUrl = `${HA_BLOG_URL}/${targetVersion.replace(".", "/")}/`;
-          const html = await fetchUrl(releaseUrl);
-          const { content } = extractContentFromHtml(html);
-          
-          // Extract breaking changes section if present
-          const breakingMatch = content.match(/breaking changes?[\s\S]*?(?=\n## |$)/i);
-          if (breakingMatch) {
-            releaseNotesContent = breakingMatch[0].substring(0, 5000);
+
+        const notesCacheKey = `release-notes:${targetVersion}`;
+        const cachedNotes = getCachedDoc(notesCacheKey);
+        if (cachedNotes !== null) {
+          releaseNotesContent = cachedNotes;
+        } else {
+          try {
+            const releaseUrl = `${HA_BLOG_URL}/${targetVersion.replace(".", "/")}/`;
+            const html = await fetchUrl(releaseUrl);
+            const { content } = extractContentFromHtml(html);
+
+            // Extract breaking changes section if present
+            const breakingMatch = content.match(/breaking changes?[\s\S]*?(?=\n## |$)/i);
+            if (breakingMatch) {
+              releaseNotesContent = breakingMatch[0].substring(0, 5000);
+            }
+            setCachedDoc(notesCacheKey, releaseNotesContent);
+          } catch (e) {
+            sendLog("debug", "docs", { action: "release_notes_fetch_failed", error: e.message });
           }
-        } catch (e) {
-          sendLog("debug", "docs", { action: "release_notes_fetch_failed", error: e.message });
         }
         
         const result = {
@@ -3247,60 +3515,74 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           });
         }
         
-        // Step 2: Run deprecation checks on the content
-        const { deprecated, warnings: depWarnings, suggestions: depSuggestions } = await checkConfigForDeprecations(content);
-        
-        // Step 3: Run structural YAML checks
-        const structuralIssues = validateYamlStructure(content);
-        
-        // Step 4: Basic YAML lint checks (same as check_config_syntax)
-        const lintWarnings = [];
-        if (content.includes("\t")) {
-          lintWarnings.push("Tab characters detected. YAML requires spaces for indentation.");
-        }
-        if (/: \|$/m.test(content)) {
-          lintWarnings.push("Multi-line strings with '|' should have content on the following lines, indented.");
-        }
-        if (/entity_id:.*,/m.test(content)) {
-          lintWarnings.push("Multiple entity_ids should be formatted as a YAML list, not comma-separated.");
-        }
-        
-        // Step 5: Check HA repair issues for relevant warnings
-        let repairWarnings = [];
-        try {
-          // Extract integration domains from the YAML content
-          const domainMatches = content.match(/^([a-z_]+):/gm);
-          const domains = domainMatches
-            ? [...new Set(domainMatches.map(m => m.replace(":", "").trim()))]
-            : [];
-          
-          if (domains.length > 0) {
-            const repairs = await getRepairsForDomains(domains);
-            for (const issue of repairs) {
-              const breaksIn = issue.breaks_in_ha_version ? ` (breaks in ${issue.breaks_in_ha_version})` : "";
-              const url = issue.learn_more_url ? ` See: ${issue.learn_more_url}` : "";
-              repairWarnings.push(
-                `[HA REPAIR - ${issue.severity || "warning"}] ${issue.domain}: ${issue.translation_key || issue.issue_id}${breaksIn}${url}`
-              );
-            }
+        // Steps 2-6 depend only on the content â€” reuse a recent dry-run's results
+        const memoKey = createHash("sha256").update(`${validate_templates}:${content}`).digest("hex");
+        let contentChecks = getValidationMemo(memoKey);
+
+        if (!contentChecks) {
+          // Step 3: Run structural YAML checks
+          const structuralIssues = validateYamlStructure(content);
+
+          // Step 4: Basic YAML lint checks (same as check_config_syntax)
+          const lintWarnings = [];
+          if (content.includes("\t")) {
+            lintWarnings.push("Tab characters detected. YAML requires spaces for indentation.");
           }
-        } catch (_) { /* non-critical — repairs check is best-effort */ }
-        
-        // Step 6: Validate Jinja2 templates through HA's template engine
-        let templateResults = [];
-        if (validate_templates) {
-          try {
-            templateResults = await extractAndValidateTemplates(content);
-          } catch (error) {
-            sendLog("warning", "config", { action: "template_validation_failed", error: error.message });
-            templateResults = [{ template: "(all)", status: "skipped", reason: `Template validation unavailable: ${error.message}` }];
+          if (/: \|$/m.test(content)) {
+            lintWarnings.push("Multi-line strings with '|' should have content on the following lines, indented.");
           }
+          if (/entity_id:.*,/m.test(content)) {
+            lintWarnings.push("Multiple entity_ids should be formatted as a YAML list, not comma-separated.");
+          }
+
+          // Steps 2 (deprecations), 5 (repairs), and 6 (templates) are
+          // independent network checks â€” run them concurrently
+          const [deprecationResult, repairWarnings, templateResults] = await Promise.all([
+            checkConfigForDeprecations(content),
+            (async () => {
+              const warnings = [];
+              try {
+                // Extract integration domains from the YAML content
+                const domainMatches = content.match(/^([a-z_]+):/gm);
+                const domains = domainMatches
+                  ? [...new Set(domainMatches.map(m => m.replace(":", "").trim()))]
+                  : [];
+
+                if (domains.length > 0) {
+                  const repairs = await getRepairsForDomains(domains);
+                  for (const issue of repairs) {
+                    const breaksIn = issue.breaks_in_ha_version ? ` (breaks in ${issue.breaks_in_ha_version})` : "";
+                    const url = issue.learn_more_url ? ` See: ${issue.learn_more_url}` : "";
+                    warnings.push(
+                      `[HA REPAIR - ${issue.severity || "warning"}] ${issue.domain}: ${issue.translation_key || issue.issue_id}${breaksIn}${url}`
+                    );
+                  }
+                }
+              } catch (_) { /* non-critical â€” repairs check is best-effort */ }
+              return warnings;
+            })(),
+            (async () => {
+              if (!validate_templates) return [];
+              try {
+                return await extractAndValidateTemplates(content);
+              } catch (error) {
+                sendLog("warning", "config", { action: "template_validation_failed", error: error.message });
+                return [{ template: "(all)", status: "skipped", reason: `Template validation unavailable: ${error.message}` }];
+              }
+            })(),
+          ]);
+
+          contentChecks = { deprecationResult, structuralIssues, lintWarnings, repairWarnings, templateResults };
+          setValidationMemo(memoKey, contentChecks);
         }
-        
+
+        const { warnings: depWarnings, suggestions: depSuggestions } = contentChecks.deprecationResult;
+        const { structuralIssues, lintWarnings, repairWarnings, templateResults } = contentChecks;
+
         const templateErrors = templateResults.filter(r => r.status === "error");
         const structuralErrors = structuralIssues.filter(i => i.severity === "error");
         
-        // Step 6b: Content protection checks — prevent accidental data loss
+        // Step 6b: Content protection checks â€” prevent accidental data loss
         // These checks compare the new content against the existing file to catch
         // cases where the AI writes a replacement instead of an augmentation.
         // Three layers of defense:
@@ -3366,7 +3648,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               }
             }
 
-          } catch (_) { /* best effort — don't block if we can't read the existing file */ }
+          } catch (_) { /* best effort â€” don't block if we can't read the existing file */ }
         }
 
         // Step 6c: Check for pre-write blocking errors (template errors + structural errors + content protection)
@@ -3527,7 +3809,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let backupRestored = false;
         
         try {
-          const haCheck = await callHA("/config/core/check_config", "POST");
+          const haCheck = await callHA("/config/core/check_config", "POST", null, CHECK_CONFIG_TIMEOUT_MS);
           validationResult = haCheck.result || "valid";
           validationErrors = haCheck.errors || "";
           
@@ -3556,7 +3838,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           validationResult = "skipped";
           validationErrors = `Could not run HA config check: ${error.message}`;
           
-          // Cannot confirm the config is valid — restore backup same as "invalid"
+          // Cannot confirm the config is valid â€” restore backup same as "invalid"
           if (hadExistingFile) {
             try {
               copyFileSync(backupPath, resolvedPath);
@@ -3566,7 +3848,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               sendLog("error", "config", { action: "backup_restore_failed", error: restoreError.message });
             }
           } else {
-            // No original file existed — remove the unvalidated one
+            // No original file existed â€” remove the unvalidated one
             try {
               unlinkSync(resolvedPath);
               backupRestored = true;
@@ -3574,7 +3856,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         }
         
-        // Retain .bak file as a recovery point — do NOT delete on success.
+        // Retain .bak file as a recovery point â€” do NOT delete on success.
         // The backup always contains the file content from right before this write.
         // The next write_config_safe call to this file will overwrite it with the
         // then-current version, so there is always one recovery point available.
@@ -3593,7 +3875,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           
           // Include any error log entries that might help
           try {
-            const log = await callHA("/core/api/error_log");
+            const log = await callHA("/error_log");
             const recentLines = log.split("\n").slice(-20).join("\n");
             if (recentLines.trim()) {
               responseText += `## Recent Error Log\n\n\`\`\`\n${recentLines}\n\`\`\`\n\n`;
@@ -3654,77 +3936,69 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         sendLog("info", "updates", { action: "check_updates", component });
         
         const updates = [];
-        
-        // Get Core info
-        if (component === "all" || component === "core") {
-          try {
-            const coreInfo = await callSupervisor("/core/info");
+
+        // The component checks are independent â€” fetch them concurrently
+        const wants = (c) => component === "all" || component === c;
+        const [coreResult, osResult, supResult, addonsResult] = await Promise.allSettled([
+          wants("core") ? callSupervisor("/core/info") : Promise.resolve(null),
+          wants("os") ? callSupervisor("/os/info") : Promise.resolve(null),
+          wants("supervisor") ? callSupervisor("/supervisor/info") : Promise.resolve(null),
+          wants("addons") ? callSupervisor("/addons") : Promise.resolve(null),
+        ]);
+
+        if (coreResult.status === "fulfilled" && coreResult.value) {
+          const coreInfo = coreResult.value;
+          updates.push({
+            type: "core",
+            name: "Home Assistant Core",
+            installed: coreInfo.version,
+            latest: coreInfo.version_latest,
+            update_available: coreInfo.update_available,
+          });
+        } else if (coreResult.status === "rejected") {
+          sendLog("warning", "updates", { action: "core_check_failed", error: coreResult.reason?.message });
+        }
+
+        // OS info not available on supervised installs
+        if (osResult.status === "fulfilled" && osResult.value?.version) {
+          const osInfo = osResult.value;
+          updates.push({
+            type: "os",
+            name: "Home Assistant OS",
+            installed: osInfo.version,
+            latest: osInfo.version_latest,
+            update_available: osInfo.update_available,
+          });
+        } else if (osResult.status === "rejected") {
+          sendLog("debug", "updates", { action: "os_not_available" });
+        }
+
+        if (supResult.status === "fulfilled" && supResult.value) {
+          const supInfo = supResult.value;
+          updates.push({
+            type: "supervisor",
+            name: "Home Assistant Supervisor",
+            installed: supInfo.version,
+            latest: supInfo.version_latest,
+            update_available: supInfo.update_available,
+          });
+        } else if (supResult.status === "rejected") {
+          sendLog("warning", "updates", { action: "supervisor_check_failed", error: supResult.reason?.message });
+        }
+
+        if (addonsResult.status === "fulfilled" && addonsResult.value) {
+          for (const addon of addonsResult.value.addons.filter(a => a.installed)) {
             updates.push({
-              type: "core",
-              name: "Home Assistant Core",
-              installed: coreInfo.version,
-              latest: coreInfo.version_latest,
-              update_available: coreInfo.update_available,
+              type: "addon",
+              slug: addon.slug,
+              name: addon.name,
+              installed: addon.version,
+              latest: addon.version_latest,
+              update_available: addon.update_available,
             });
-          } catch (e) {
-            sendLog("warning", "updates", { action: "core_check_failed", error: e.message });
           }
-        }
-        
-        // Get OS info (only on HAOS)
-        if (component === "all" || component === "os") {
-          try {
-            const osInfo = await callSupervisor("/os/info");
-            if (osInfo.version) {
-              updates.push({
-                type: "os",
-                name: "Home Assistant OS",
-                installed: osInfo.version,
-                latest: osInfo.version_latest,
-                update_available: osInfo.update_available,
-              });
-            }
-          } catch (e) {
-            // OS info not available on supervised installs
-            sendLog("debug", "updates", { action: "os_not_available" });
-          }
-        }
-        
-        // Get Supervisor info
-        if (component === "all" || component === "supervisor") {
-          try {
-            const supInfo = await callSupervisor("/supervisor/info");
-            updates.push({
-              type: "supervisor",
-              name: "Home Assistant Supervisor",
-              installed: supInfo.version,
-              latest: supInfo.version_latest,
-              update_available: supInfo.update_available,
-            });
-          } catch (e) {
-            sendLog("warning", "updates", { action: "supervisor_check_failed", error: e.message });
-          }
-        }
-        
-        // Get add-on updates
-        if (component === "all" || component === "addons") {
-          try {
-            const addonsInfo = await callSupervisor("/addons");
-            const installedAddons = addonsInfo.addons.filter(a => a.installed);
-            
-            for (const addon of installedAddons) {
-              updates.push({
-                type: "addon",
-                slug: addon.slug,
-                name: addon.name,
-                installed: addon.version,
-                latest: addon.version_latest,
-                update_available: addon.update_available,
-              });
-            }
-          } catch (e) {
-            sendLog("warning", "updates", { action: "addons_check_failed", error: e.message });
-          }
+        } else if (addonsResult.status === "rejected") {
+          sendLog("warning", "updates", { action: "addons_check_failed", error: addonsResult.reason?.message });
         }
         
         // Format output
@@ -3736,7 +4010,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (pendingUpdates.length > 0) {
           responseText += `## Pending Updates\n\n`;
           for (const u of pendingUpdates) {
-            responseText += `- **${u.name}** ${u.type === 'addon' ? `(${u.slug})` : ''}: ${u.installed} → ${u.latest}\n`;
+            responseText += `- **${u.name}** ${u.type === 'addon' ? `(${u.slug})` : ''}: ${u.installed} â†’ ${u.latest}\n`;
           }
           responseText += `\n`;
         }
@@ -3745,7 +4019,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         responseText += `| Component | Type | Installed | Latest | Update |\n`;
         responseText += `|-----------|------|-----------|--------|--------|\n`;
         for (const u of updates) {
-          responseText += `| ${u.name} | ${u.type} | ${u.installed} | ${u.latest} | ${u.update_available ? '⬆️ Yes' : '✓ Current'} |\n`;
+          responseText += `| ${u.name} | ${u.type} | ${u.installed} | ${u.latest} | ${u.update_available ? 'â¬†ï¸ Yes' : 'âœ“ Current'} |\n`;
         }
         
         return makeCompatibleResponse({
@@ -3758,9 +4032,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         sendLog("info", "updates", { action: "get_changelog", addon: addon_slug });
         
         try {
-          // Get add-on info first
-          const addonInfo = await callSupervisor(`/addons/${addon_slug}/info`);
-          const changelog = await callSupervisor(`/addons/${addon_slug}/changelog`);
+          const [addonInfo, changelog] = await Promise.all([
+            callSupervisor(`/addons/${addon_slug}/info`),
+            callSupervisor(`/addons/${addon_slug}/changelog`),
+          ]);
           
           let responseText = `# Changelog: ${addonInfo.name}\n\n`;
           responseText += `**Current Version:** ${addonInfo.version}\n`;
@@ -3817,8 +4092,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         
         try {
-          const result = await callSupervisor(endpoint, "POST", payload);
-          
+          const result = await callSupervisor(endpoint, "POST", payload, UPDATE_TIMEOUT_MS);
+
           // Background mode returns job_id
           const jobId = result?.job_id || result;
           
@@ -3847,9 +4122,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           
           let statusEmoji;
           if (job.done) {
-            statusEmoji = job.errors ? "❌" : "✅";
+            statusEmoji = job.errors ? "âŒ" : "âœ…";
           } else {
-            statusEmoji = "⏳";
+            statusEmoji = "â³";
           }
           
           let responseText = `# Job Progress: ${job_id}\n\n`;
@@ -3868,13 +4143,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           responseText += `\n`;
           
           // Progress bar visualization
-          const progressBar = "█".repeat(Math.floor((job.progress || 0) / 5)) + "░".repeat(20 - Math.floor((job.progress || 0) / 5));
+          const progressBar = "â–ˆ".repeat(Math.floor((job.progress || 0) / 5)) + "â–‘".repeat(20 - Math.floor((job.progress || 0) / 5));
           responseText += `**[${progressBar}] ${job.progress || 0}%**\n\n`;
           
           if (job.child_jobs && job.child_jobs.length > 0) {
             responseText += `## Sub-tasks\n\n`;
             for (const child of job.child_jobs) {
-              const childStatus = child.done ? (child.errors ? "❌" : "✅") : "⏳";
+              const childStatus = child.done ? (child.errors ? "âŒ" : "âœ…") : "â³";
               responseText += `- ${childStatus} ${child.name}: ${child.progress || 0}%\n`;
             }
             responseText += `\n`;
@@ -3928,7 +4203,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               responseText += `| Job ID | Name | Status |\n`;
               responseText += `|--------|------|--------|\n`;
               for (const job of completedJobs.slice(0, 10)) {
-                const status = job.errors ? "❌ Failed" : "✅ Success";
+                const status = job.errors ? "âŒ Failed" : "âœ… Success";
                 responseText += `| ${job.uuid.substring(0, 8)}... | ${job.name} | ${status} |\n`;
               }
             }
@@ -3951,13 +4226,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         
         // Discover ESPHome add-on
-        const esphome = await discoverESPHome();
+        const esphome = await getESPHomeConnection();
         if (!esphome.ok) {
           const d = esphome.diagnostics;
           let msg = `ESPHome discovery failed: ${esphome.error}\n\n`;
           msg += `## Discovery Steps\n`;
           for (const s of d.steps) {
-            msg += `- **${s.name}**: ${s.status}${s.detail ? ` — ${typeof s.detail === "object" ? JSON.stringify(s.detail) : s.detail}` : ""}\n`;
+            msg += `- **${s.name}**: ${s.status}${s.detail ? ` â€” ${typeof s.detail === "object" ? JSON.stringify(s.detail) : s.detail}` : ""}\n`;
           }
           if (d.esphomeSlugs) msg += `\nESPHome-matching slugs: ${JSON.stringify(d.esphomeSlugs)}`;
           if (d.networkFallback) msg += `\nNetwork fallback data: ${JSON.stringify(d.networkFallback, null, 2)}`;
@@ -3991,7 +4266,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               
               for (const device of configured) {
                 const needsUpdate = device.current_version !== device.deployed_version;
-                const status = needsUpdate ? "⬆️ Update available" : "✓ Current";
+                const status = needsUpdate ? "â¬†ï¸ Update available" : "âœ“ Current";
                 responseText += `| ${device.name} | ${device.target_platform} | ${device.current_version || '-'} | ${device.deployed_version || '-'} | ${status} |\n`;
               }
               responseText += `\n`;
@@ -4020,7 +4295,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (d?.steps) {
             msg += `\n## Discovery Steps\n`;
             for (const s of d.steps) {
-              msg += `- **${s.name}**: ${s.status}${s.detail ? ` — ${typeof s.detail === "object" ? JSON.stringify(s.detail) : s.detail}` : ""}\n`;
+              msg += `- **${s.name}**: ${s.status}${s.detail ? ` â€” ${typeof s.detail === "object" ? JSON.stringify(s.detail) : s.detail}` : ""}\n`;
             }
           }
           if (d?.networkFallback) msg += `\nNetwork fallback: ${JSON.stringify(d.networkFallback, null, 2)}`;
@@ -4037,7 +4312,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         
         // Discover ESPHome add-on
-        const esphome = await discoverESPHome();
+        const esphome = await getESPHomeConnection();
         if (!esphome.ok) {
           const d = esphome.diagnostics;
           let msg = `ESPHome discovery failed: ${esphome.error}\n\nSteps: `;
@@ -4064,7 +4339,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           
           // Format the output
           let responseText = `# ESPHome Compile: ${device}\n\n`;
-          responseText += `**Status:** ${result.success ? "✅ Success" : "❌ Failed"}\n`;
+          responseText += `**Status:** ${result.success ? "âœ… Success" : "âŒ Failed"}\n`;
           responseText += `**Duration:** ${result.duration}\n`;
           responseText += `**Exit Code:** ${result.code}\n\n`;
           
@@ -4109,7 +4384,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         
         // Discover ESPHome add-on
-        const esphome = await discoverESPHome();
+        const esphome = await getESPHomeConnection();
         if (!esphome.ok) {
           const d = esphome.diagnostics;
           let msg = `ESPHome discovery failed: ${esphome.error}\n\nSteps: `;
@@ -4136,7 +4411,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           
           // Format the output
           let responseText = `# ESPHome Upload: ${device}\n\n`;
-          responseText += `**Status:** ${result.success ? "✅ Success" : "❌ Failed"}\n`;
+          responseText += `**Status:** ${result.success ? "âœ… Success" : "âŒ Failed"}\n`;
           responseText += `**Target:** ${port}\n`;
           responseText += `**Duration:** ${result.duration}\n`;
           responseText += `**Exit Code:** ${result.code}\n\n`;
@@ -4207,7 +4482,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let statusEmoji, statusText;
         
         if (inProgress) {
-          statusEmoji = "⏳";
+          statusEmoji = "â³";
           statusText = "Update In Progress";
           responseText += `## ${statusEmoji} ${statusText}\n\n`;
           responseText += `| Field | Value |\n`;
@@ -4217,21 +4492,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (progress !== null && progress !== undefined) {
             const filled = Math.floor(progress / 5);
             const empty = 20 - filled;
-            responseText += `| Progress | ${"█".repeat(filled)}${"░".repeat(empty)} ${progress}% |\n`;
+            responseText += `| Progress | ${"â–ˆ".repeat(filled)}${"â–‘".repeat(empty)} ${progress}% |\n`;
           } else {
             responseText += `| Progress | Compiling/Installing (no percentage reported) |\n`;
           }
           responseText += `\n**The update is running.** Call this tool again in a few seconds to check progress.\n`;
           
         } else if (currentState === "unavailable") {
-          statusEmoji = "🔄";
+          statusEmoji = "ðŸ”„";
           statusText = "Device Rebooting";
           responseText += `## ${statusEmoji} ${statusText}\n\n`;
           responseText += `The device is currently unavailable - likely rebooting after firmware update.\n\n`;
           responseText += `**Wait a minute and call this tool again** to check if the device comes back online.\n`;
           
         } else if (currentState === "off") {
-          statusEmoji = "✅";
+          statusEmoji = "âœ…";
           statusText = "Up to Date";
           responseText += `## ${statusEmoji} ${statusText}\n\n`;
           responseText += `| Field | Value |\n`;
@@ -4244,9 +4519,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           // Update is available
           if (start_update) {
             // Start the update
-            await callHA("/services/update/install", "POST", { entity_id });
+            await callHA("/services/update/install", "POST", { entity_id }, UPDATE_TIMEOUT_MS);
             
-            statusEmoji = "🚀";
+            statusEmoji = "ðŸš€";
             statusText = "Update Started";
             responseText += `## ${statusEmoji} ${statusText}\n\n`;
             responseText += `| Field | Value |\n`;
@@ -4257,7 +4532,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             responseText += `The device will now download and install the firmware. This typically takes 1-5 minutes.\n\n`;
             responseText += `**Call this tool again** (without \`start_update\`) to monitor progress.\n`;
           } else {
-            statusEmoji = "⬆️";
+            statusEmoji = "â¬†ï¸";
             statusText = "Update Available";
             responseText += `## ${statusEmoji} ${statusText}\n\n`;
             responseText += `| Field | Value |\n`;
@@ -4268,7 +4543,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             responseText += `**To start the update**, call this tool with \`start_update: true\`.\n`;
           }
         } else {
-          statusEmoji = "❓";
+          statusEmoji = "â“";
           statusText = `Unknown State: ${currentState}`;
           responseText += `## ${statusEmoji} ${statusText}\n\n`;
           responseText += `The device is in an unexpected state. Check the Home Assistant UI for more details.\n`;
@@ -4311,7 +4586,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             throw new Error(ESPHOME_TOKEN_ERROR);
           }
           try {
-            const esphome = await discoverESPHome();
+            const esphome = await getESPHomeConnection();
             if (esphome.ok && esphome.url && esphome.ingressSession) {
               esphomeEnv.HAB_ESPHOME_URL = esphome.url;
               esphomeEnv.HAB_ESPHOME_SESSION = esphome.ingressSession;
@@ -4534,7 +4809,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   try {
     // Static resources
     if (uri === "ha://states/summary") {
-      const states = await callHA("/states");
+      const states = await getCachedStates();
       const summary = generateStateSummary(states);
       return {
         contents: [{ 
@@ -4547,7 +4822,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     }
     
     if (uri === "ha://automations") {
-      const states = await callHA("/states");
+      const states = await getCachedStates();
       const automations = states
         .filter(s => s.entity_id.startsWith("automation."))
         .map(s => ({
@@ -4567,7 +4842,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     }
     
     if (uri === "ha://scripts") {
-      const states = await callHA("/states");
+      const states = await getCachedStates();
       const scripts = states
         .filter(s => s.entity_id.startsWith("script."))
         .map(s => ({
@@ -4586,7 +4861,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     }
     
     if (uri === "ha://scenes") {
-      const states = await callHA("/states");
+      const states = await getCachedStates();
       const scenes = states
         .filter(s => s.entity_id.startsWith("scene."))
         .map(s => ({
@@ -4604,15 +4879,12 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     }
     
     if (uri === "ha://areas") {
-      // Use namespace to properly accumulate values in Jinja2 loop
-      const result = await callHA("/template", "POST", {
-        template: "{% set ns = namespace(areas=[]) %}{% for area in areas() %}{% set ns.areas = ns.areas + [{'id': area, 'name': area_name(area)}] %}{% endfor %}{{ ns.areas | tojson }}"
-      });
+      const areas = await getRegistry("config/area_registry/list");
       return {
-        contents: [{ 
-          uri, 
-          mimeType: "application/json", 
-          text: result,
+        contents: [{
+          uri,
+          mimeType: "application/json",
+          text: JSON.stringify(areas.map((a) => ({ id: a.area_id, name: a.name }))),
           annotations: { audience: ["assistant"], priority: 0.7 },
         }],
       };
@@ -4643,7 +4915,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     }
     
     if (uri === "ha://anomalies") {
-      const states = await callHA("/states");
+      const states = await getCachedStates();
       const anomalies = states.map(detectAnomaly).filter(Boolean);
       return {
         contents: [{ 
@@ -4656,7 +4928,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     }
     
     if (uri === "ha://suggestions") {
-      const states = await callHA("/states");
+      const states = await getCachedStates();
       const suggestions = generateSuggestions(states);
       return {
         contents: [{ 
@@ -4672,7 +4944,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const statesMatch = uri.match(/^ha:\/\/states\/(\w+)$/);
     if (statesMatch) {
       const domain = statesMatch[1];
-      const states = await callHA("/states");
+      const states = await getCachedStates();
       const filtered = states
         .filter(s => s.entity_id.startsWith(`${domain}.`))
         .map(s => ({
@@ -4708,11 +4980,12 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const areaMatch = uri.match(/^ha:\/\/area\/(.+)$/);
     if (areaMatch) {
       const areaId = areaMatch[1];
-      const states = await callHA("/states");
+      const [states, areas] = await Promise.all([
+        getCachedStates(),
+        getRegistry("config/area_registry/list"),
+      ]);
       const areaEntities = states.filter(s => s.attributes?.area_id === areaId);
-      const areaNameResult = await callHA("/template", "POST", {
-        template: `{{ area_name('${areaId}') }}`
-      });
+      const areaNameResult = areas.find(a => a.area_id === areaId)?.name || areaId;
       return {
         contents: [{ 
           uri, 
@@ -4815,7 +5088,7 @@ Focus on practical solutions I can implement.`,
 **Goal:** ${goal}
 
 Please help me create this automation by following these steps in order:
-1. **Read the existing automations file** using \`read_file\` on \`automations.yaml\` (or wherever automations are stored). You MUST include ALL existing automations in the final write — never overwrite them.
+1. **Read the existing automations file** using \`read_file\` on \`automations.yaml\` (or wherever automations are stored). You MUST include ALL existing automations in the final write â€” never overwrite them.
 2. Use \`search_entities\` to find relevant entities for this automation
 3. Check if similar automations already exist using \`get_states\` with domain "automation"
 4. Identify the best trigger(s) for this use case
@@ -4823,7 +5096,7 @@ Please help me create this automation by following these steps in order:
 6. Define the action(s) to take
 7. Provide the complete YAML that contains ALL existing automations PLUS the new one
 
-**CRITICAL:** When writing to ANY config file, the content must include everything that was already there. Writing only new content will permanently delete existing configuration. \`write_config_safe\` will block writes that would lose list entries, drop top-level keys, or significantly shrink the file — but always verify yourself first by reading the file before writing.
+**CRITICAL:** When writing to ANY config file, the content must include everything that was already there. Writing only new content will permanently delete existing configuration. \`write_config_safe\` will block writes that would lose list entries, drop top-level keys, or significantly shrink the file â€” but always verify yourself first by reading the file before writing.
 
 Consider edge cases and make the automation robust.`,
               annotations: { audience: ["assistant"], priority: 1.0 },

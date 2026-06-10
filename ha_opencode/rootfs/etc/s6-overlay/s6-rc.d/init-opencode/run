@@ -7,7 +7,8 @@
 bashio::log.info "Initializing OpenCode..."
 
 # Save addon version for the terminal banner
-bashio::addon.version > /data/.addon_version
+ADDON_VERSION=$(bashio::addon.version)
+printf '%s\n' "${ADDON_VERSION}" > /data/.addon_version
 
 # ==============================================================================
 # Read configuration options
@@ -35,38 +36,50 @@ ENV_VARS_FILE="/data/.env_vars"
 # Always start fresh to avoid stale variables from previous config
 rm -f "${ENV_VARS_FILE}"
 
-ENV_VARS_COUNT=$(bashio::config 'env_vars | length')
+OPTIONS_FILE="/data/options.json"
+ENV_VARS_COUNT=$(jq -r '.env_vars // [] | length' "${OPTIONS_FILE}")
+
+# Reserved names that would break the add-on if overridden
+ENV_VARS_RESERVED='"HOME","PATH","SUPERVISOR_TOKEN","XDG_DATA_HOME","XDG_CONFIG_HOME","NODE_OPTIONS","SHELL","USER","PWD"'
 
 if [ "${ENV_VARS_COUNT}" -gt 0 ]; then
     bashio::log.info "Processing ${ENV_VARS_COUNT} user-defined environment variable(s)..."
-    
-    for i in $(seq 0 $((ENV_VARS_COUNT - 1))); do
-        VAR_NAME=$(bashio::config "env_vars[${i}].name")
-        VAR_VALUE=$(bashio::config "env_vars[${i}].value")
-        
-        # Validate variable name: must be a valid shell identifier
-        if ! printf '%s' "${VAR_NAME}" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$'; then
-            bashio::log.warning "Skipping invalid environment variable name: '${VAR_NAME}'"
-            bashio::log.warning "Names must start with a letter or underscore and contain only letters, digits, and underscores."
-            continue
-        fi
-        
-        # Block overriding critical system variables
-        case "${VAR_NAME}" in
-            HOME|PATH|SUPERVISOR_TOKEN|XDG_DATA_HOME|XDG_CONFIG_HOME|NODE_OPTIONS|SHELL|USER|PWD)
+
+    # Single jq pass emits all valid export lines (handles quoting via @sh,
+    # multi-line values stay intact inside the quotes)
+    jq -r "
+        (.env_vars // [])[] |
+        select(.name | test(\"^[A-Za-z_][A-Za-z0-9_]*\$\")) |
+        select(.name | IN(${ENV_VARS_RESERVED}) | not) |
+        \"export \(.name)=\(.value | tostring | @sh)\"
+    " "${OPTIONS_FILE}" >> "${ENV_VARS_FILE}"
+
+    # Second pass classifies names for logging only
+    while IFS=$'\t' read -r STATUS VAR_NAME; do
+        case "${STATUS}" in
+            ok)
+                bashio::log.info "  Set environment variable: ${VAR_NAME}"
+                ;;
+            invalid)
+                bashio::log.warning "Skipping invalid environment variable name: '${VAR_NAME}'"
+                bashio::log.warning "Names must start with a letter or underscore and contain only letters, digits, and underscores."
+                ;;
+            reserved)
                 bashio::log.warning "Skipping reserved environment variable: '${VAR_NAME}'"
                 bashio::log.warning "System variables cannot be overridden to prevent breaking the add-on."
-                continue
                 ;;
         esac
-        
-        # Escape single quotes in the value for safe shell sourcing
-        ESCAPED_VALUE=$(printf '%s' "${VAR_VALUE}" | sed "s/'/'\\\\''/g")
-        
-        printf "export %s='%s'\n" "${VAR_NAME}" "${ESCAPED_VALUE}" >> "${ENV_VARS_FILE}"
-        bashio::log.info "  Set environment variable: ${VAR_NAME}"
-    done
-    
+    done < <(jq -r "
+        (.env_vars // [])[] | .name as \$n |
+        if (\$n | test(\"^[A-Za-z_][A-Za-z0-9_]*\$\") | not) then
+            \"invalid\t\(\$n | gsub(\"[\\n\\t]\"; \" \"))\"
+        elif (\$n | IN(${ENV_VARS_RESERVED})) then
+            \"reserved\t\(\$n)\"
+        else
+            \"ok\t\(\$n)\"
+        end
+    " "${OPTIONS_FILE}")
+
     chmod 600 "${ENV_VARS_FILE}"
     bashio::log.info "Environment variables written to ${ENV_VARS_FILE}"
 else
@@ -167,6 +180,7 @@ printf 'export HA_VERIFY_SSL=false\n' >> "${ENV_VARS_FILE}"
 Z2M_URL_CONFIG=$(bashio::config 'z2m_url' || echo "")
 Z2M_TOPIC_CONFIG=$(bashio::config 'z2m_mqtt_topic' || echo "")
 
+DISCOVER_Z2M_FLAG="true"
 if [ -n "${Z2M_URL_CONFIG}" ]; then
     case "${Z2M_URL_CONFIG}" in
         http://*|https://*)
@@ -182,15 +196,7 @@ if [ -n "${Z2M_URL_CONFIG}" ]; then
     if [ -n "${Z2M_TOPIC_CONFIG}" ]; then
         printf 'export Z2M_MQTT_TOPIC=%q\n' "${Z2M_TOPIC_CONFIG}" >> "${ENV_VARS_FILE}"
     fi
-else
-    bashio::log.info "Discovering Zigbee2MQTT for zigporter..."
-    Z2M_EXPORTS=$(node /usr/local/bin/discover-z2m.js 2>/dev/null || true)
-    if [ -n "${Z2M_EXPORTS}" ]; then
-        printf '%s\n' "${Z2M_EXPORTS}" >> "${ENV_VARS_FILE}"
-        bashio::log.info "Zigbee2MQTT discovered — zigporter Z2M commands ready"
-    else
-        bashio::log.info "Zigbee2MQTT discovery skipped (addon not installed or not running)"
-    fi
+    DISCOVER_Z2M_FLAG="false"
 fi
 
 chmod 600 "${ENV_VARS_FILE}"
@@ -209,25 +215,25 @@ else
 fi
 
 # ==============================================================================
-# Discover ESPHome ingress URL and session for hab CLI
-# hab needs HAB_ESPHOME_URL and HAB_ESPHOME_SESSION to talk to ESPHome.
-# The MCP server discovers these at runtime, but shell users need them in env.
-# This is best-effort — if ESPHome isn't running or discovery fails, we skip.
+# Background service discovery (Zigbee2MQTT + ESPHome)
+# Discovers Z2M_URL/Z2M_MQTT_TOPIC and HAB_ESPHOME_URL/HAB_ESPHOME_SESSION for
+# shell users. The MCP server does its own runtime discovery, so this runs
+# fully detached — boot never waits on network discovery. Results land in
+# /data/.env_vars_discovered, sourced alongside /data/.env_vars when present.
 # ==============================================================================
 
-if [ -n "${ACCESS_TOKEN}" ]; then
-    bashio::log.info "Discovering ESPHome ingress for hab CLI..."
-    # Export token so the Node.js script can read it from process.env
-    export HA_ACCESS_TOKEN="${ACCESS_TOKEN}"
-    ESPHOME_EXPORTS=$(node /usr/local/bin/discover-esphome.js 2>/dev/null || true)
-    if [ -n "${ESPHOME_EXPORTS}" ]; then
-        printf '%s\n' "${ESPHOME_EXPORTS}" >> "${ENV_VARS_FILE}"
-        chmod 600 "${ENV_VARS_FILE}"
-        bashio::log.info "ESPHome ingress discovered — hab esphome commands ready"
-    else
-        bashio::log.info "ESPHome discovery skipped (addon not installed or not running, or access token invalid)"
-    fi
-else
+rm -f /data/.env_vars_discovered
+
+if [ -n "${ACCESS_TOKEN}" ] || [ "${DISCOVER_Z2M_FLAG}" = "true" ]; then
+    bashio::log.info "Starting background discovery (Zigbee2MQTT/ESPHome)..."
+    # setsid detaches the process into its own session so it survives the
+    # oneshot's exit; output goes to a log file for debugging
+    HA_ACCESS_TOKEN="${ACCESS_TOKEN}" DISCOVER_Z2M="${DISCOVER_Z2M_FLAG}" \
+        setsid node /usr/local/bin/discover-services.js \
+        >/tmp/discover-services.log 2>&1 </dev/null &
+fi
+
+if [ -z "${ACCESS_TOKEN}" ]; then
     bashio::log.warning "No access token configured — ESPHome tools will not work"
     bashio::log.warning "Set a Long-Lived Access Token in the add-on Configuration tab"
 fi
@@ -402,22 +408,41 @@ mkdir -p /data/.local/share/opencode
 mkdir -p /data/.config/opencode
 
 # ==============================================================================
-# Verify hab CLI (Home Assistant Builder) is available
+# Verify hab and zigporter CLIs are available
+# CLI versions only change with an addon update, so they're cached in the
+# help stamp alongside the addon version — a matching stamp skips the version
+# spawns AND the AGENTS.md help re-injection below.
 # ==============================================================================
 
+HELP_STAMP_FILE="/data/.help_stamp"
+STAMP_ADDON=""
+STAMP_HAB=""
+STAMP_ZIGPORTER=""
+if [ -f "${HELP_STAMP_FILE}" ]; then
+    IFS=':' read -r STAMP_ADDON STAMP_HAB STAMP_ZIGPORTER < "${HELP_STAMP_FILE}" || true
+fi
+HELP_STAMP_FRESH=false
+if [ "${STAMP_ADDON}" = "${ADDON_VERSION}" ] && [ -n "${STAMP_HAB}" ]; then
+    HELP_STAMP_FRESH=true
+fi
+
 if command -v hab &>/dev/null; then
-    HAB_VERSION=$(hab version 2>/dev/null | grep -oP '[\d.]+' | head -1 || echo "unknown")
+    if [ "${HELP_STAMP_FRESH}" = "true" ]; then
+        HAB_VERSION="${STAMP_HAB}"
+    else
+        HAB_VERSION=$(hab version 2>/dev/null | grep -oP '[\d.]+' | head -1 || echo "unknown")
+    fi
     bashio::log.info "hab CLI available (v${HAB_VERSION}) - pre-authenticated via Supervisor"
 else
     bashio::log.warning "hab CLI not found - some admin features will be unavailable"
 fi
 
-# ==============================================================================
-# Verify zigporter CLI is available
-# ==============================================================================
-
 if command -v zigporter &>/dev/null; then
-    ZIGPORTER_VERSION=$(zigporter --version 2>/dev/null | grep -oP '[\d.]+' | head -1 || echo "unknown")
+    if [ "${HELP_STAMP_FRESH}" = "true" ]; then
+        ZIGPORTER_VERSION="${STAMP_ZIGPORTER}"
+    else
+        ZIGPORTER_VERSION=$(zigporter --version 2>/dev/null | grep -oP '[\d.]+' | head -1 || echo "unknown")
+    fi
     bashio::log.info "zigporter CLI available (v${ZIGPORTER_VERSION}) - Zigbee rename, inspect, mesh tools"
 else
     bashio::log.warning "zigporter CLI not found - Zigbee management features will be unavailable"
@@ -427,17 +452,25 @@ fi
 # Deploy AGENTS.md to Home Assistant config directory
 # On first install: copy the full file
 # On update: if user hasn't customized it, refresh to get latest instructions
+# A fresh help stamp means the deployed copy already has current help injected,
+# so both the refresh-copy and the injection passes are skipped.
 # ==============================================================================
+
+AGENTS_REFRESHED=false
 
 if [ ! -f "/homeassistant/AGENTS.md" ]; then
     cp /opt/ha-mcp-server/AGENTS.md /homeassistant/AGENTS.md
+    AGENTS_REFRESHED=true
     bashio::log.info "Deployed default AGENTS.md to /homeassistant/"
     bashio::log.info "You can customize AI instructions by editing AGENTS.md"
+elif [ "${HELP_STAMP_FRESH}" = "true" ]; then
+    bashio::log.info "AGENTS.md is current (addon version unchanged) - skipping refresh"
 else
     # Check if the user has customized AGENTS.md by comparing a known marker
     # If it still contains our marker comment, it's safe to update
     if grep -q "# Home Assistant OpenCode Rules" /homeassistant/AGENTS.md 2>/dev/null; then
         cp /opt/ha-mcp-server/AGENTS.md /homeassistant/AGENTS.md
+        AGENTS_REFRESHED=true
         bashio::log.info "Updated AGENTS.md with latest AI instructions"
     else
         bashio::log.info "AGENTS.md has been customized by user - skipping update"
@@ -449,9 +482,10 @@ fi
 # Replaces the content between HAB_LIVE_HELP markers with current `hab --help`
 # output so the AI always sees the exact commands available in the installed
 # hab version — regardless of what was documented when the addon was built.
+# Only runs when AGENTS.md was (re)deployed this boot.
 # ==============================================================================
 
-if command -v hab &>/dev/null && [ -f "/homeassistant/AGENTS.md" ]; then
+if [ "${AGENTS_REFRESHED}" = "true" ] && command -v hab &>/dev/null && [ -f "/homeassistant/AGENTS.md" ]; then
     if grep -q "<!-- HAB_LIVE_HELP_START -->" /homeassistant/AGENTS.md 2>/dev/null; then
         HAB_HELP_OUTPUT=$(hab --help 2>/dev/null || echo "")
         if [ -n "${HAB_HELP_OUTPUT}" ]; then
@@ -485,7 +519,7 @@ fi
 # so the AI always sees the exact commands available in the installed version.
 # ==============================================================================
 
-if command -v zigporter &>/dev/null && [ -f "/homeassistant/AGENTS.md" ]; then
+if [ "${AGENTS_REFRESHED}" = "true" ] && command -v zigporter &>/dev/null && [ -f "/homeassistant/AGENTS.md" ]; then
     if grep -q "<!-- ZIGPORTER_LIVE_HELP_START -->" /homeassistant/AGENTS.md 2>/dev/null; then
         ZIGPORTER_HELP_OUTPUT=$(zigporter --help 2>/dev/null || echo "")
         if [ -n "${ZIGPORTER_HELP_OUTPUT}" ]; then
@@ -511,6 +545,11 @@ if command -v zigporter &>/dev/null && [ -f "/homeassistant/AGENTS.md" ]; then
             bashio::log.info "Injected live zigporter help (v${ZIGPORTER_VERSION}) into AGENTS.md"
         fi
     fi
+fi
+
+# Record the stamp so unchanged boots skip the version spawns and re-injection
+if [ "${HELP_STAMP_FRESH}" != "true" ]; then
+    printf '%s:%s:%s\n' "${ADDON_VERSION}" "${HAB_VERSION:-unknown}" "${ZIGPORTER_VERSION:-unknown}" > "${HELP_STAMP_FILE}"
 fi
 
 # ==============================================================================

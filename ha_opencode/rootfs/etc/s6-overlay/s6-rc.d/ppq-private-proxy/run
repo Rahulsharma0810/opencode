@@ -13,6 +13,10 @@ if [ -f /data/.env_vars ]; then
     source /data/.env_vars
 fi
 
+if [ -f /data/.env_vars_discovered ]; then
+    source /data/.env_vars_discovered
+fi
+
 PPQ_PRIVATE_ENABLED=$(bashio::config 'ppq_private_enabled' 2>/dev/null || echo "false")
 
 if ! bashio::var.true "${PPQ_PRIVATE_ENABLED}"; then

@@ -152,3 +152,4 @@ backup_exclude:
   - ".cache/*"
   - ".local/share/opencode/cache/*"
   - ".env_vars"
+  - ".env_vars_discovered"

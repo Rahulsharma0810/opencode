@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 2.0.3b3
+
+Performance release — startup, MCP tool, and YAML LSP latency.
+
+- **Faster startup** — Zigbee2MQTT/ESPHome discovery now runs in the background instead of blocking boot, AGENTS.md help injection only re-runs after add-on updates, the baseline OpenCode binary ships in the image (amd64), and user env vars are processed in a single pass.
+- **Faster MCP tools** — timeouts on all API and documentation fetches, 10-minute backoff for failed remote fetches (removes up to 15 s per config write on offline installs), concurrent template validation with dry-run result reuse in `write_config_safe`, cached ESPHome discovery and ingress sessions, a short-lived entity state cache, WebSocket registry calls for areas/devices instead of slow Jinja templates, a persistent screenshot browser, and compact, capped output for large responses.
+- **Faster YAML LSP** — completion documentation resolves lazily and space no longer triggers completion (far smaller payloads on large installs), HA fetches time out and serve cached data while refreshing in the background, and diagnostics debounce per document with stale results dropped.
+- **Fixes** — `get_error_log` returned 404 due to a doubled API path; service hover in the YAML LSP was unreachable; editing one file no longer cancels another file's pending diagnostics.
+- **Behavior** — unfiltered `get_services` now returns a domain/service index (pass `domain` for full schemas); `get_history` defaults to minimal responses (pass `minimal: false` for full attributes).
+- **Smaller image** — checked-in dev `node_modules` are no longer baked into the Docker image.
+
 ## 2.0.3b2
 
 - **GitHub Release image assets** — multi-arch build workflows now attach `container-images.md` and `image-manifest.txt` to the matching GitHub Release after publishing the GHCR image manifest, making the published image references and manifest details visible from the release page.

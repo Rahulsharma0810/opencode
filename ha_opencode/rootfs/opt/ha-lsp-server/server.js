@@ -126,6 +126,8 @@ setTimeout(refreshDeprecationPatternsFromRemote, 10000);
 const SUPERVISOR_API = "http://supervisor/core/api";
 const SUPERVISOR_TOKEN = process.env.SUPERVISOR_TOKEN;
 const CACHE_TTL = 60000; // 1 minute cache TTL
+// Editor requests must never hang on a slow HA API; timeouts fall back to stale cache
+const FETCH_TIMEOUT_MS = 3000;
 
 // HA configuration keys that expect entity IDs
 const ENTITY_ID_KEYS = [
@@ -179,6 +181,7 @@ class HomeAssistantClient {
   constructor() {
     this.cache = new Map();
     this.cacheTimestamps = new Map();
+    this.inflight = new Map();
   }
 
   async fetch(endpoint, method = "GET", body = null) {
@@ -192,6 +195,7 @@ class HomeAssistantClient {
         "Authorization": `Bearer ${SUPERVISOR_TOKEN}`,
         "Content-Type": "application/json",
       },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     };
 
     if (body) {
@@ -221,19 +225,30 @@ class HomeAssistantClient {
     if (this.isCacheValid(key)) {
       return this.cache.get(key);
     }
-    
-    try {
-      const data = await fetcher();
-      this.cache.set(key, data);
-      this.cacheTimestamps.set(key, Date.now());
-      return data;
-    } catch (error) {
-      // Return stale cache if available on error
-      if (this.cache.has(key)) {
-        return this.cache.get(key);
-      }
-      throw error;
+
+    // Concurrent misses share one fetch instead of each hitting the API
+    let refresh = this.inflight.get(key);
+    if (!refresh) {
+      refresh = (async () => {
+        try {
+          const data = await fetcher();
+          this.cache.set(key, data);
+          this.cacheTimestamps.set(key, Date.now());
+          return data;
+        } finally {
+          this.inflight.delete(key);
+        }
+      })();
+      this.inflight.set(key, refresh);
     }
+
+    // Stale-while-revalidate: serve expired data immediately, refresh in background
+    if (this.cache.has(key)) {
+      refresh.catch(() => {});
+      return this.cache.get(key);
+    }
+
+    return refresh;
   }
 
   invalidateCache() {
@@ -255,21 +270,26 @@ class HomeAssistantClient {
     return this.getCached("config", () => this.fetch("/config"));
   }
 
+  // Registry templates emit parallel id/name arrays in a single pass —
+  // incremental `list + [item]` concatenation is quadratic in HA's Jinja sandbox
+
   async getAreas() {
     return this.getCached("areas", async () => {
       const result = await this.fetch("/template", "POST", {
-        template: `{% set area_list = [] %}{% for area in areas() %}{% set area_list = area_list + [{'id': area, 'name': area_name(area)}] %}{% endfor %}{{ area_list | tojson }}`
+        template: `{% set ids = areas() %}{{ [ids, ids | map('area_name') | list] | tojson }}`
       });
-      return JSON.parse(result);
+      const [ids, names] = JSON.parse(result);
+      return ids.map((id, i) => ({ id, name: names[i] }));
     });
   }
 
   async getDevices() {
     return this.getCached("devices", async () => {
       const result = await this.fetch("/template", "POST", {
-        template: `{% set device_list = [] %}{% for device in devices() %}{% set device_list = device_list + [{'id': device, 'name': device_attr(device, 'name'), 'area': device_attr(device, 'area_id')}] %}{% endfor %}{{ device_list | tojson }}`
+        template: `{% set ids = devices() %}{{ [ids, ids | map('device_attr', 'name') | list, ids | map('device_attr', 'area_id') | list] | tojson }}`
       });
-      return JSON.parse(result);
+      const [ids, names, areas] = JSON.parse(result);
+      return ids.map((id, i) => ({ id, name: names[i], area: areas[i] }));
     });
   }
 
@@ -277,9 +297,10 @@ class HomeAssistantClient {
     return this.getCached("floors", async () => {
       try {
         const result = await this.fetch("/template", "POST", {
-          template: `{% set floor_list = [] %}{% for floor in floors() %}{% set floor_list = floor_list + [{'id': floor, 'name': floor_name(floor)}] %}{% endfor %}{{ floor_list | tojson }}`
+          template: `{% set ids = floors() %}{{ [ids, ids | map('floor_name') | list] | tojson }}`
         });
-        return JSON.parse(result);
+        const [ids, names] = JSON.parse(result);
+        return ids.map((id, i) => ({ id, name: names[i] }));
       } catch {
         // Floors might not be available in older HA versions
         return [];
@@ -291,9 +312,10 @@ class HomeAssistantClient {
     return this.getCached("labels", async () => {
       try {
         const result = await this.fetch("/template", "POST", {
-          template: `{% set label_list = [] %}{% for label in labels() %}{% set label_list = label_list + [{'id': label, 'name': label_name(label)}] %}{% endfor %}{{ label_list | tojson }}`
+          template: `{% set ids = labels() %}{{ [ids, ids | map('label_name') | list] | tojson }}`
         });
-        return JSON.parse(result);
+        const [ids, names] = JSON.parse(result);
+        return ids.map((id, i) => ({ id, name: names[i] }));
       } catch {
         // Labels might not be available in older HA versions
         return [];
@@ -392,7 +414,7 @@ connection.onInitialize((params) => {
       textDocumentSync: TextDocumentSyncKind.Incremental,
       completionProvider: {
         resolveProvider: true,
-        triggerCharacters: [".", ":", " ", '"', "'", "/"],
+        triggerCharacters: [".", ":", '"', "'", "/"],
       },
       hoverProvider: true,
       definitionProvider: true,
@@ -530,21 +552,12 @@ async function getEntityCompletions(context) {
         continue;
       }
 
+      // Documentation is built lazily in onCompletionResolve — eagerly
+      // serializing it for thousands of entities dominates completion latency
       completions.push({
         label: entityId,
         kind: CompletionItemKind.Value,
         detail: friendlyName,
-        documentation: {
-          kind: MarkupKind.Markdown,
-          value: [
-            `**${friendlyName}**`,
-            "",
-            `- **State:** ${state.state}`,
-            `- **Domain:** ${domain}`,
-            state.attributes?.device_class ? `- **Device Class:** ${state.attributes.device_class}` : "",
-            state.attributes?.unit_of_measurement ? `- **Unit:** ${state.attributes.unit_of_measurement}` : "",
-          ].filter(Boolean).join("\n"),
-        },
         insertText: entityId,
         sortText: entityId.startsWith(partial) ? `0${entityId}` : `1${entityId}`,
         data: { type: "entity", entityId },
@@ -572,26 +585,10 @@ async function getServiceCompletions(context) {
         continue;
       }
 
-      const fieldDocs = Object.entries(service.fields)
-        .slice(0, 5)
-        .map(([name, field]) => `- \`${name}\`: ${field.description || "No description"}`)
-        .join("\n");
-
       completions.push({
         label: service.fullName,
         kind: CompletionItemKind.Function,
         detail: service.name || service.service,
-        documentation: {
-          kind: MarkupKind.Markdown,
-          value: [
-            `**${service.fullName}**`,
-            "",
-            service.description,
-            "",
-            fieldDocs ? "**Fields:**" : "",
-            fieldDocs,
-          ].filter(Boolean).join("\n"),
-        },
         insertText: service.fullName,
         sortText: service.fullName.startsWith(partial) ? `0${service.fullName}` : `1${service.fullName}`,
         data: { type: "service", service: service.fullName },
@@ -711,10 +708,10 @@ async function getJinjaCompletions(context) {
 
 connection.onCompletionResolve(async (item) => {
   // Resolve additional details for completion items
-  if (item.data?.type === "entity") {
+  if (item.data?.type === "entity" || item.data?.type === "jinja_entity") {
     try {
-      const states = await haClient.getStates();
-      const state = states.find(s => s.entity_id === item.data.entityId);
+      const entityMap = await haClient.getEntityMap();
+      const state = entityMap.get(item.data.entityId);
       if (state) {
         const attrs = Object.entries(state.attributes || {})
           .filter(([k]) => !k.startsWith("_"))
@@ -738,7 +735,34 @@ connection.onCompletionResolve(async (item) => {
       // Ignore resolution errors
     }
   }
-  
+
+  if (item.data?.type === "service") {
+    try {
+      const services = await haClient.getServiceList();
+      const service = services.find(s => s.fullName === item.data.service);
+      if (service) {
+        const fieldDocs = Object.entries(service.fields)
+          .slice(0, 5)
+          .map(([name, field]) => `- \`${name}\`: ${field.description || "No description"}`)
+          .join("\n");
+
+        item.documentation = {
+          kind: MarkupKind.Markdown,
+          value: [
+            `**${service.fullName}**`,
+            "",
+            service.description,
+            "",
+            fieldDocs ? "**Fields:**" : "",
+            fieldDocs,
+          ].filter(Boolean).join("\n"),
+        };
+      }
+    } catch (error) {
+      // Ignore resolution errors
+    }
+  }
+
   return item;
 });
 
@@ -760,18 +784,13 @@ connection.onHover(async (params) => {
   
   const word = document.getText(wordRange);
 
-  // Check if it looks like an entity ID
+  // domain.object_id — a service in service/action positions, otherwise an entity
   if (word.match(/^[a-z_]+\.[a-z0-9_]+$/i)) {
-    return await getEntityHover(word);
-  }
-
-  // Check if it's a service
-  if (word.match(/^[a-z_]+\.[a-z0-9_]+$/i)) {
-    // Check context to see if this is a service
     const lineText = text.split("\n")[position.line];
     if (lineText.match(/(?:service|action):\s*/)) {
       return await getServiceHover(word);
     }
+    return await getEntityHover(word);
   }
 
   // Check for Jinja template - try to render it
@@ -1054,24 +1073,32 @@ async function validateDocument(document) {
   return diagnostics;
 }
 
+// Debounce timers are per-document so editing one file doesn't cancel
+// pending validation of another
+const validationTimeouts = new Map();
+
 // Document change handler - validate on change
 documents.onDidChangeContent(async (change) => {
   const document = change.document;
-  
+
   // Only validate YAML files
   if (!document.uri.endsWith(".yaml") && !document.uri.endsWith(".yml")) {
     return;
   }
-  
-  // Debounce validation
-  clearTimeout(validationTimeout);
-  validationTimeout = setTimeout(async () => {
-    const diagnostics = await validateDocument(document);
-    connection.sendDiagnostics({ uri: document.uri, diagnostics });
-  }, 500);
-});
 
-let validationTimeout;
+  const uri = document.uri;
+  clearTimeout(validationTimeouts.get(uri));
+  validationTimeouts.set(uri, setTimeout(async () => {
+    validationTimeouts.delete(uri);
+    const version = document.version;
+    const diagnostics = await validateDocument(document);
+    // Drop results computed from a superseded document version
+    if (documents.get(uri)?.version !== version) {
+      return;
+    }
+    connection.sendDiagnostics({ uri, diagnostics });
+  }, 500));
+});
 
 // ============================================================================
 // GO-TO-DEFINITION PROVIDER
@@ -1143,6 +1170,8 @@ connection.onDefinition(async (params) => {
 // ============================================================================
 
 documents.onDidClose((e) => {
+  clearTimeout(validationTimeouts.get(e.document.uri));
+  validationTimeouts.delete(e.document.uri);
   connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] });
 });
 

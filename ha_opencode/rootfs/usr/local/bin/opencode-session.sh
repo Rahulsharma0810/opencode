@@ -13,6 +13,11 @@ if [ -f /data/.env_vars ]; then
     source /data/.env_vars
 fi
 
+# Load discovered service variables (written by background discovery)
+if [ -f /data/.env_vars_discovered ]; then
+    source /data/.env_vars_discovered
+fi
+
 # Ensure SUPERVISOR_TOKEN is available for MCP server
 # This is auto-injected by Home Assistant Supervisor
 if [ -z "$SUPERVISOR_TOKEN" ]; then

@@ -1,34 +1,47 @@
 #!/usr/bin/env node
 // ==============================================================================
-// ESPHome Discovery Script
+// Service Discovery Script (Zigbee2MQTT + ESPHome)
 //
-// Discovers the ESPHome addon's ingress URL and creates an ingress session.
-// Outputs shell "export" statements to stdout for sourcing into the environment.
+// Discovers the Zigbee2MQTT addon (Z2M_URL, Z2M_MQTT_TOPIC) and the ESPHome
+// addon's ingress URL/session (HAB_ESPHOME_URL, HAB_ESPHOME_SESSION) in one
+// pass, sharing a single Supervisor /addons fetch. Writes shell "export"
+// statements to /data/.env_vars_discovered for sourcing by shells/services.
 //
-// Used by init-opencode to pre-populate HAB_ESPHOME_URL and HAB_ESPHOME_SESSION
-// so that `hab esphome *` commands work from the shell without MCP mediation.
+// Launched detached from init-opencode so boot never blocks on discovery.
+// Both discoveries are best-effort: failures leave their exports absent and
+// MCP-mediated commands still do their own runtime discovery.
+//
+// Environment:
+//   SUPERVISOR_TOKEN  required
+//   HA_ACCESS_TOKEN   enables ESPHome discovery (ingress session needs it)
+//   DISCOVER_Z2M      set to "false" to skip Z2M (manual z2m_url configured)
 //
 // Exit codes:
-//   0 = success (exports printed) or graceful skip (nothing printed)
+//   0 = success or graceful skip
 //   1 = unexpected error
 // ==============================================================================
 
 const http = require("http");
+const fs = require("fs");
 
-// Load ws from the MCP server's node_modules (installed at image build time)
-let WebSocket;
-try {
-  WebSocket = require("/opt/ha-mcp-server/node_modules/ws");
-} catch {
-  // ws not available — skip silently
-  process.exit(0);
-}
+const OUTPUT_FILE = "/data/.env_vars_discovered";
+// LAN calls to the Supervisor — keep timeouts short
+const REQUEST_TIMEOUT_MS = 3000;
+const WS_TIMEOUT_MS = 8000;
 
 const SUPERVISOR_TOKEN = process.env.SUPERVISOR_TOKEN;
 const HA_ACCESS_TOKEN = process.env.HA_ACCESS_TOKEN;
+const DISCOVER_Z2M = process.env.DISCOVER_Z2M !== "false";
 
-if (!SUPERVISOR_TOKEN || !HA_ACCESS_TOKEN) {
-  // Cannot proceed without both tokens
+// Load ws from the MCP server's node_modules (installed at image build time)
+let WebSocket = null;
+try {
+  WebSocket = require("/opt/ha-mcp-server/node_modules/ws");
+} catch {
+  // ws not available — ESPHome discovery will be skipped
+}
+
+if (!SUPERVISOR_TOKEN) {
   process.exit(0);
 }
 
@@ -52,7 +65,7 @@ function supervisorGet(endpoint) {
       });
     });
     req.on("error", reject);
-    req.setTimeout(10000, () => {
+    req.setTimeout(REQUEST_TIMEOUT_MS, () => {
       req.destroy();
       reject(new Error(`Timeout on ${endpoint}`));
     });
@@ -78,7 +91,7 @@ function haGet(endpoint) {
       });
     });
     req.on("error", reject);
-    req.setTimeout(10000, () => {
+    req.setTimeout(REQUEST_TIMEOUT_MS, () => {
       req.destroy();
       reject(new Error(`Timeout on /core/api${endpoint}`));
     });
@@ -98,7 +111,7 @@ function createIngressSession(haCoreUrl, token) {
     const timeout = setTimeout(() => {
       ws.close();
       reject(new Error("WebSocket timeout"));
-    }, 15000);
+    }, WS_TIMEOUT_MS);
 
     ws.on("message", (raw) => {
       try {
@@ -142,26 +155,67 @@ function createIngressSession(haCoreUrl, token) {
   });
 }
 
+// Single-quote a value for safe shell sourcing
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
 // ---------------------------------------------------------------------------
-// Main discovery flow (mirrors discoverESPHome() in the MCP server)
+// Zigbee2MQTT discovery — returns export lines (or [] on skip)
 // ---------------------------------------------------------------------------
-async function main() {
-  // Step 1: Find ESPHome addon
-  const addonsData = await supervisorGet("/addons");
-  const addons = addonsData.addons || addonsData;
-  const esphome = (Array.isArray(addons) ? addons : []).find((a) =>
+async function discoverZ2M(addons) {
+  const z2m = addons.find((a) =>
+    a.slug &&
+    a.slug.includes("zigbee2mqtt") &&
+    !a.slug.includes("zigbee2mqtt_edge") &&
+    (a.state === "started" || a.version)
+  );
+  if (!z2m) return [];
+
+  const info = await supervisorGet(`/addons/${z2m.slug}/info`);
+  if (info.state !== "started") return [];
+
+  // Inside the HA Docker network, addons are reachable by hostname.
+  // Z2M has no authentication — direct HTTP access works.
+  const hostname = info.hostname;
+  const port = info.ingress_port;
+  if (!hostname || !port) return [];
+
+  // The Z2M addon stores the MQTT base topic in options.mqtt.base_topic
+  // or options.mqtt_base_topic
+  let mqttTopic = "zigbee2mqtt";
+  if (info.options) {
+    if (info.options.mqtt && info.options.mqtt.base_topic) {
+      mqttTopic = info.options.mqtt.base_topic;
+    } else if (info.options.mqtt_base_topic) {
+      mqttTopic = info.options.mqtt_base_topic;
+    }
+  }
+
+  return [
+    `export Z2M_URL=${shellQuote(`http://${hostname}:${port}`)}`,
+    `export Z2M_MQTT_TOPIC=${shellQuote(mqttTopic)}`,
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// ESPHome discovery — returns export lines (or [] on skip)
+// (mirrors discoverESPHome() in the MCP server)
+// ---------------------------------------------------------------------------
+async function discoverESPHome(addons) {
+  const esphome = addons.find((a) =>
     a.slug &&
     a.slug.includes("esphome") &&
     (a.state === "started" || a.state === "stopped" || a.version)
   );
-  if (!esphome) return; // ESPHome not installed — nothing to do
+  if (!esphome) return [];
 
-  // Step 2: Get addon info (need ingress_entry)
-  const info = await supervisorGet(`/addons/${esphome.slug}/info`);
-  if (!info.ingress_entry) return;
+  const [info, haConfig] = await Promise.all([
+    supervisorGet(`/addons/${esphome.slug}/info`),
+    haGet("/config"),
+  ]);
+  if (!info.ingress_entry) return [];
 
-  // Step 3: Discover HA Core URL
-  const haConfig = await haGet("/config");
   let haCoreUrl = (haConfig.internal_url || haConfig.external_url || "").replace(/\/+$/, "");
 
   if (!haCoreUrl) {
@@ -181,27 +235,45 @@ async function main() {
     }
   }
 
-  if (!haCoreUrl) return;
+  if (!haCoreUrl) return [];
 
-  // Step 4: Create ingress session via WebSocket
   const session = await createIngressSession(haCoreUrl, HA_ACCESS_TOKEN);
-  if (!session) return;
+  if (!session) return [];
 
-  // Step 5: Build final ingress URL
   const ingressPath = info.ingress_entry.startsWith("/")
     ? info.ingress_entry
     : `/${info.ingress_entry}`;
-  const url = `${haCoreUrl}${ingressPath}`;
 
-  // Output shell export statements (single-quoted to prevent expansion)
-  const safeUrl = url.replace(/'/g, "'\\''");
-  const safeSession = session.replace(/'/g, "'\\''");
-  process.stdout.write(`export HAB_ESPHOME_URL='${safeUrl}'\n`);
-  process.stdout.write(`export HAB_ESPHOME_SESSION='${safeSession}'\n`);
+  return [
+    `export HAB_ESPHOME_URL=${shellQuote(`${haCoreUrl}${ingressPath}`)}`,
+    `export HAB_ESPHOME_SESSION=${shellQuote(session)}`,
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Main — one shared /addons fetch, both discoveries concurrent
+// ---------------------------------------------------------------------------
+async function main() {
+  const wantZ2M = DISCOVER_Z2M;
+  const wantESPHome = !!(HA_ACCESS_TOKEN && WebSocket);
+  if (!wantZ2M && !wantESPHome) return;
+
+  const addonsData = await supervisorGet("/addons");
+  const addonsRaw = addonsData.addons || addonsData;
+  const addons = Array.isArray(addonsRaw) ? addonsRaw : [];
+
+  const results = await Promise.allSettled([
+    wantZ2M ? discoverZ2M(addons) : Promise.resolve([]),
+    wantESPHome ? discoverESPHome(addons) : Promise.resolve([]),
+  ]);
+
+  const lines = results.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
+  if (lines.length > 0) {
+    fs.writeFileSync(OUTPUT_FILE, lines.join("\n") + "\n", { mode: 0o600 });
+    fs.chmodSync(OUTPUT_FILE, 0o600);
+  }
 }
 
 main().catch(() => {
-  // Swallow all errors — this is best-effort discovery.
-  // If it fails, hab esphome commands won't work from shell but
-  // MCP-mediated hab commands still do their own runtime discovery.
+  // Swallow all errors — this is best-effort discovery
 });
