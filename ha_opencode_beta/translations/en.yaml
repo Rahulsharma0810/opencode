@@ -11,6 +11,10 @@ configuration:
   cpu_mode:
     name: "CPU Mode"
     description: "Controls which OpenCode binary is used. 'auto' detects your CPU capabilities automatically (recommended). 'baseline' forces the baseline binary for older CPUs without AVX2 support. 'regular' forces the standard binary."
+
+  opencode_update_policy:
+    name: "OpenCode Update Policy"
+    description: "Controls how OpenCode itself is updated. 'latest' installs and updates OpenCode in persistent add-on data so it can follow upstream releases independently of add-on releases. 'bundled' uses only the OpenCode version included in the add-on image and disables OpenCode self-update."
   
   terminal_theme:
     name: "Terminal Theme"

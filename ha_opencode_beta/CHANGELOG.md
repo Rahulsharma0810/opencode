@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 2.1.1b0
+
+- **OpenCode runtime update policy** — added a `latest`/`bundled` update policy. By default the add-on installs `opencode-ai@latest` into persistent add-on data and uses that before the bundled fallback, while `bundled` disables OpenCode self-update and uses the image version only. Baseline CPU mode now logs VM CPU passthrough guidance and the known upstream baseline OOM issue.
+
 ## 2.0.3b7
 
 - **Web terminal clipboard fixes** — copying inside OpenCode now reaches the browser clipboard via OSC 52 support through tmux and a custom ttyd page, with a one-click fallback on plain HTTP. Plain `Ctrl+V` paste now works, and macOS users can use `Option+drag` to select text while full-screen terminal apps capture the mouse.

@@ -43,6 +43,7 @@ Configure the app from the **Configuration** tab in the app page.
 | Option | Default | Description |
 |--------|---------|-------------|
 | **CPU Mode** | `auto` | Controls which OpenCode binary is used. `auto` detects your CPU capabilities automatically (recommended). `baseline` forces the baseline binary for older CPUs without AVX2 support. `regular` forces the standard binary. |
+| **OpenCode Update Policy** | `latest` | Controls how OpenCode itself is updated. `latest` installs and updates OpenCode in persistent add-on data so it can follow upstream releases independently of add-on releases. `bundled` uses only the OpenCode version included in the add-on image and disables OpenCode self-update. |
 | **PPQ API Key** | `""` | API key for PPQ private-mode models. Stored as a masked add-on option and exported only to the internal PPQ proxy service. Only needed for the beta PPQ feature. |
 | **Enable Add-on Folder Guidance** | `false` | Shows terminal guidance for Home Assistant add-on development folders. The add-on mounts `/addons` and `/addon_configs` for development access; `/addon_configs` may contain sensitive add-on data. This option updates guidance after restart, but it is not a hard filesystem permission boundary. |
 | **Zigbee2MQTT URL** | `""` | Optional URL for Zigbee2MQTT, used by zigporter commands such as `list-z2m` and `network-map --backend z2m`. Include `http://` or `https://`, for example `http://homeassistant.local:8099`. Host/IP-only values are treated as `http://`. |
@@ -54,6 +55,16 @@ Configure the app from the **Configuration** tab in the app page.
 ### Resource Usage
 
 OpenCode snapshots are disabled by default in this add-on to reduce memory and disk pressure on Home Assistant systems. File watching also ignores noisy internal paths such as `.storage/`, `.cloud/`, caches, logs, and the Home Assistant database. You can override these defaults with **Custom OpenCode Configuration (JSON)** if you need OpenCode's built-in snapshot/undo behavior.
+
+### OpenCode Updates
+
+By default, **OpenCode Update Policy** is set to `latest`. On startup, the add-on installs or updates `opencode-ai@latest` into `/data/.npm-global` and puts that persistent install first in `PATH`. OpenCode's own patch-level self-update also uses this persistent npm prefix, so upstream OpenCode updates can survive add-on restarts without requiring a new add-on release.
+
+The add-on image still includes a bundled OpenCode copy as a fallback. If the startup update fails, the add-on logs a warning and continues with the existing persistent install or the bundled version.
+
+Set **OpenCode Update Policy** to `bundled` to use only the OpenCode version included in the add-on image. This also disables OpenCode self-update and ignores any persistent OpenCode install under `/data/.npm-global`.
+
+For x64 systems without visible AVX2 support, OpenCode selects its baseline binary. If this add-on runs in a VM on an AVX2-capable host, enable host CPU passthrough; generic QEMU/KVM CPU models can hide AVX2 and force the baseline binary unnecessarily. There is a known upstream baseline OOM issue tracked at `anomalyco/opencode#20988`.
 
 #### Environment Variables Example
 

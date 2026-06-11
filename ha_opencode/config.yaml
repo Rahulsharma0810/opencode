@@ -51,10 +51,13 @@ options:
   # Feature toggles
   mcp_enabled: true
   lsp_enabled: true
-  
+
   # CPU mode: auto (detect), baseline (for older CPUs), regular (force AVX2)
   cpu_mode: "auto"
-  
+
+  # OpenCode update policy: latest (persistent runtime updates) or bundled (image version only)
+  opencode_update_policy: "latest"
+
   # Terminal appearance
   terminal_theme: "breeze"
   font_size: 14
@@ -107,6 +110,7 @@ schema:
   
   # CPU mode
   cpu_mode: list(auto|baseline|regular)
+  opencode_update_policy: list(latest|bundled)
   
   # Terminal appearance
   terminal_theme: list(breeze|catppuccin_mocha|catppuccin_latte|dracula|nord|tokyo_night|one_dark|solarized_dark|solarized_light|gruvbox_dark)
@@ -149,6 +153,7 @@ schema:
 # Exclude caches from backups
 backup_exclude:
   - ".npm/*"
+  - ".npm-global/*"
   - ".cache/*"
   - ".local/share/opencode/cache/*"
   - ".env_vars"

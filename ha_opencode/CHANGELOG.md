@@ -1,6 +1,10 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- **OpenCode runtime update policy** — added a `latest`/`bundled` update policy. By default the add-on installs `opencode-ai@latest` into persistent add-on data and uses that before the bundled fallback, while `bundled` disables OpenCode self-update and uses the image version only. Baseline CPU mode now logs VM CPU passthrough guidance and the known upstream baseline OOM issue.
+
 ## 2.1.0
 
 - **PPQ private TEE models (beta)** — added an opt-in internal PPQ private-mode proxy, pinned at image build time, with a masked PPQ API key option and an OpenCode custom provider for PPQ private models. This feature ships in the stable add-on, but should still be considered beta while provider behavior and proxy integration are validated.

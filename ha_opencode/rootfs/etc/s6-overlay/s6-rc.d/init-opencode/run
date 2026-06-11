@@ -15,6 +15,7 @@ printf '%s\n' "${ADDON_VERSION}" > /data/.addon_version
 # ==============================================================================
 
 CPU_MODE_CONFIG=$(bashio::config 'cpu_mode' || echo "auto")
+OPENCODE_UPDATE_POLICY=$(bashio::config 'opencode_update_policy' || echo "latest")
 MCP_ENABLED=$(bashio::config 'mcp_enabled')
 LSP_ENABLED=$(bashio::config 'lsp_enabled' || echo "true")
 SCREENSHOT_ENABLED=$(bashio::config 'screenshot_enabled' || echo "false")
@@ -24,7 +25,32 @@ PPQ_PRIVATE_ENABLED=$(bashio::config 'ppq_private_enabled' || echo "false")
 ACCESS_TOKEN=$(bashio::config 'access_token' || echo "")
 PPQ_API_KEY=$(bashio::config 'ppq_api_key' || echo "")
 
-bashio::log.info "Configuration: MCP=${MCP_ENABLED} LSP=${LSP_ENABLED} SCREENSHOT=${SCREENSHOT_ENABLED} PPQ_PRIVATE=${PPQ_PRIVATE_ENABLED} ADDON_ACCESS=${ADDON_ACCESS_ENABLED} CPU_MODE=${CPU_MODE_CONFIG}"
+case "${OPENCODE_UPDATE_POLICY}" in
+    latest|bundled)
+        ;;
+    *)
+        bashio::log.warning "Unknown opencode_update_policy '${OPENCODE_UPDATE_POLICY}' - defaulting to latest"
+        OPENCODE_UPDATE_POLICY="latest"
+        ;;
+esac
+
+bashio::log.info "Configuration: MCP=${MCP_ENABLED} LSP=${LSP_ENABLED} SCREENSHOT=${SCREENSHOT_ENABLED} PPQ_PRIVATE=${PPQ_PRIVATE_ENABLED} ADDON_ACCESS=${ADDON_ACCESS_ENABLED} CPU_MODE=${CPU_MODE_CONFIG} OPENCODE_UPDATE_POLICY=${OPENCODE_UPDATE_POLICY}"
+
+# Set up persistent HOME and npm global prefix for OpenCode runtime updates.
+export HOME="/data"
+export XDG_DATA_HOME="/data/.local/share"
+export XDG_CONFIG_HOME="/data/.config"
+export NPM_CONFIG_PREFIX="/data/.npm-global"
+
+if [ "${OPENCODE_UPDATE_POLICY}" = "latest" ]; then
+    export PATH="${NPM_CONFIG_PREFIX}/bin:/usr/local/bin:/usr/bin:/bin:${PATH}"
+else
+    export PATH="/usr/local/bin:/usr/bin:/bin:${PATH}"
+    export OPENCODE_DISABLE_AUTOUPDATE=true
+fi
+
+mkdir -p /data/.local/share/opencode /data/.config/opencode "${NPM_CONFIG_PREFIX}"
+printf '%s\n' "${OPENCODE_UPDATE_POLICY}" > /data/.opencode_update_policy
 
 # ==============================================================================
 # Process user-defined environment variables
@@ -40,7 +66,7 @@ OPTIONS_FILE="/data/options.json"
 ENV_VARS_COUNT=$(jq -r '.env_vars // [] | length' "${OPTIONS_FILE}")
 
 # Reserved names that would break the add-on if overridden
-ENV_VARS_RESERVED='"HOME","PATH","SUPERVISOR_TOKEN","XDG_DATA_HOME","XDG_CONFIG_HOME","NODE_OPTIONS","SHELL","USER","PWD"'
+ENV_VARS_RESERVED='"HOME","PATH","SUPERVISOR_TOKEN","XDG_DATA_HOME","XDG_CONFIG_HOME","NPM_CONFIG_PREFIX","npm_config_prefix","NODE_OPTIONS","OPENCODE_DISABLE_AUTOUPDATE","OPENCODE_UPDATE_POLICY","SHELL","USER","PWD"'
 
 if [ "${ENV_VARS_COUNT}" -gt 0 ]; then
     bashio::log.info "Processing ${ENV_VARS_COUNT} user-defined environment variable(s)..."
@@ -85,6 +111,17 @@ if [ "${ENV_VARS_COUNT}" -gt 0 ]; then
 else
     bashio::log.info "No user-defined environment variables configured"
 fi
+
+# Export system-managed runtime paths for all services and shell sessions.
+printf 'export NPM_CONFIG_PREFIX=%q\n' "${NPM_CONFIG_PREFIX}" >> "${ENV_VARS_FILE}"
+printf 'export OPENCODE_UPDATE_POLICY=%q\n' "${OPENCODE_UPDATE_POLICY}" >> "${ENV_VARS_FILE}"
+if [ "${OPENCODE_UPDATE_POLICY}" = "latest" ]; then
+    printf 'export PATH="%s/bin:/usr/local/bin:/usr/bin:/bin:${PATH}"\n' "${NPM_CONFIG_PREFIX}" >> "${ENV_VARS_FILE}"
+else
+    printf 'export PATH="/usr/local/bin:/usr/bin:/bin:${PATH}"\n' >> "${ENV_VARS_FILE}"
+    printf 'export OPENCODE_DISABLE_AUTOUPDATE=true\n' >> "${ENV_VARS_FILE}"
+fi
+chmod 600 "${ENV_VARS_FILE}"
 
 # ==============================================================================
 # Expose configured serial devices to OpenCode and shell sessions
@@ -239,173 +276,182 @@ if [ -z "${ACCESS_TOKEN}" ]; then
 fi
 
 # ==============================================================================
-# CPU Capability Detection - Select appropriate OpenCode binary
-# OpenCode provides baseline binaries for CPUs without AVX2 support
+# CPU Capability Detection - record diagnostics for OpenCode's runtime selector
 # ==============================================================================
+
+warn_baseline_mode() {
+    bashio::log.warning "OpenCode x64 baseline mode may be used because AVX2 is not visible to the container."
+    bashio::log.warning "If this add-on runs in a VM on an AVX2-capable host, enable host CPU passthrough; generic QEMU/KVM CPU models can hide AVX2."
+    bashio::log.warning "Known upstream baseline OOM issue: https://github.com/anomalyco/opencode/issues/20988"
+}
 
 detect_cpu_capabilities() {
     local cpu_mode_config="${CPU_MODE_CONFIG:-auto}"
-    
-    if [ "${cpu_mode_config}" = "baseline" ]; then
-        echo "baseline" > /data/.cpu_mode
-        bashio::log.info "CPU mode forced to baseline by configuration"
-        return
-    elif [ "${cpu_mode_config}" = "regular" ]; then
-        echo "regular" > /data/.cpu_mode
-        bashio::log.info "CPU mode forced to regular by configuration"
-        return
-    fi
-    
+    local machine
     local cpu_flags=""
     local has_avx2=false
     local has_avx=false
-    
-    # ARM64 doesn't use x86 AVX instructions - always use regular binary
-    # Note: There is NO baseline package for ARM64, so we always use the regular one
-    local machine
+
     machine=$(uname -m)
-    if [ "${machine}" = "aarch64" ] || [ "${machine}" = "arm64" ]; then
-        echo "regular" > /data/.cpu_mode
-        bashio::log.info "ARM64 architecture detected - using regular OpenCode binary"
-        return
-    fi
-    
+
     if [ -f /proc/cpuinfo ]; then
         cpu_flags=$(awk -F': ' '/^flags/ {print $2; exit}' /proc/cpuinfo)
     fi
-    
+
     if echo "${cpu_flags}" | grep -q '\bavx2\b'; then
         has_avx2=true
     fi
-    
+
     if echo "${cpu_flags}" | grep -q '\bavx\b'; then
         has_avx=true
     fi
-    
+
+    if [ "${machine}" = "aarch64" ] || [ "${machine}" = "arm64" ]; then
+        echo "regular" > /data/.cpu_mode
+        if [ "${cpu_mode_config}" = "baseline" ]; then
+            bashio::log.warning "CPU mode baseline was requested, but ARM64 has no OpenCode baseline package; using regular binary"
+        else
+            bashio::log.info "ARM64 architecture detected - using regular OpenCode binary"
+        fi
+        return
+    fi
+
+    if [ "${cpu_mode_config}" = "baseline" ]; then
+        echo "baseline" > /data/.cpu_mode
+        bashio::log.warning "CPU mode forced to baseline by configuration"
+        warn_baseline_mode
+        return
+    elif [ "${cpu_mode_config}" = "regular" ]; then
+        echo "regular" > /data/.cpu_mode
+        if [ "${machine}" = "x86_64" ] && [ "${has_avx2}" != "true" ]; then
+            bashio::log.warning "CPU mode forced to regular, but AVX2 is not visible; OpenCode may fail with an illegal instruction"
+        else
+            bashio::log.info "CPU mode forced to regular by configuration"
+        fi
+        return
+    fi
+
     if [ "${has_avx2}" = "true" ]; then
         echo "regular" > /data/.cpu_mode
-        bashio::log.info "CPU supports AVX2 - using regular OpenCode binary"
+        bashio::log.info "CPU supports AVX2 - OpenCode regular binary will be selected"
     elif [ "${has_avx}" = "true" ]; then
         echo "baseline" > /data/.cpu_mode
-        bashio::log.info "CPU has AVX but not AVX2 - using baseline OpenCode binary"
+        bashio::log.warning "CPU has AVX but not AVX2 - OpenCode baseline binary will be selected"
+        warn_baseline_mode
     else
         echo "baseline" > /data/.cpu_mode
-        bashio::log.warning "CPU lacks AVX support - using baseline OpenCode binary"
+        bashio::log.warning "CPU lacks AVX support - OpenCode baseline binary will be selected"
+        warn_baseline_mode
     fi
 }
 
-# Run CPU detection
 detect_cpu_capabilities
 
 # ==============================================================================
-# Install/Verify OpenCode binary based on CPU capabilities
+# Install/verify OpenCode through the upstream opencode-ai package
 # ==============================================================================
 
-install_opencode_binary() {
-    local cpu_mode
-    cpu_mode=$(cat /data/.cpu_mode 2>/dev/null || echo "unknown")
-    
-    # Determine the correct package based on architecture and CPU mode
-    local arch
-    
-    case $(uname -m) in
+opencode_package_version() {
+    local package_dir="$1"
+    if [ -f "${package_dir}/package.json" ]; then
+        node -e "console.log(require('${package_dir}/package.json').version)" 2>/dev/null || echo "unknown"
+    else
+        echo "not-installed"
+    fi
+}
+
+select_opencode_package_binary() {
+    local package_dir="$1"
+    local mode="$2"
+    local machine
+    local source_binary=""
+    local target_binary="${package_dir}/bin/opencode.exe"
+
+    machine=$(uname -m)
+
+    case "${machine}" in
         x86_64)
-            arch="x64"
+            if [ "${mode}" = "baseline" ]; then
+                source_binary="${package_dir}/node_modules/opencode-linux-x64-baseline/bin/opencode"
+            else
+                source_binary="${package_dir}/node_modules/opencode-linux-x64/bin/opencode"
+            fi
             ;;
         aarch64|arm64)
-            arch="arm64"
+            source_binary="${package_dir}/node_modules/opencode-linux-arm64/bin/opencode"
+            mode="regular"
             ;;
         *)
-            bashio::log.warning "Unknown architecture: $(uname -m), using x64"
-            arch="x64"
+            bashio::log.warning "Unknown architecture $(uname -m); leaving OpenCode package binary unchanged"
+            return 0
             ;;
     esac
-    
-    # Select appropriate package based on CPU mode
-    if [ "${cpu_mode}" = "baseline" ]; then
-        if [ -d "/usr/local/lib/node_modules/opencode-linux-${arch}-baseline" ]; then
-            bashio::log.info "OpenCode baseline binary already installed"
-        else
-            bashio::log.info "Installing OpenCode baseline binary for ${arch}..."
-            npm install -g "opencode-linux-${arch}-baseline" --force 2>/dev/null || \
-                npm install -g opencode-ai --force 2>/dev/null || true
-            bashio::log.info "OpenCode baseline binary installed"
-        fi
-        
-        # Create wrapper to use baseline binary
-        create_opencode_wrapper "baseline"
-    else
-        if command -v opencode &>/dev/null; then
-            bashio::log.info "OpenCode regular binary already installed"
-        else
-            bashio::log.info "Installing OpenCode regular binary..."
-            npm install -g opencode-ai 2>/dev/null || true
-            bashio::log.info "OpenCode regular binary installed"
-        fi
+
+    if [ ! -x "${source_binary}" ]; then
+        bashio::log.warning "OpenCode ${mode} binary not found at ${source_binary}; leaving package binary unchanged"
+        return 1
     fi
+
+    mkdir -p "$(dirname "${target_binary}")"
+    rm -f "${target_binary}"
+    if ! ln "${source_binary}" "${target_binary}" 2>/dev/null; then
+        cp "${source_binary}" "${target_binary}"
+    fi
+    chmod +x "${target_binary}"
+    bashio::log.info "OpenCode package binary selected: ${mode} (${source_binary})"
 }
 
-# Create wrapper script that selects the right binary
-create_opencode_wrapper() {
-    local mode="$1"
-    local wrapper_path="/usr/local/bin/opencode"
-    
-    # Backup original or remove symlink if already a wrapper
-    if [ -L "${wrapper_path}" ]; then
-        rm -f "${wrapper_path}"
-    elif [ -f "${wrapper_path}" ] && ! grep -q "CPU_MODE" "${wrapper_path}" 2>/dev/null; then
-        mv "${wrapper_path}" "${wrapper_path}.original"
+setup_opencode_runtime() {
+    local cpu_mode
+    local bundled_package="/usr/local/lib/node_modules/opencode-ai"
+    local runtime_package="${NPM_CONFIG_PREFIX}/lib/node_modules/opencode-ai"
+    local bundled_version
+    local runtime_version
+    local runtime_available=false
+
+    cpu_mode=$(cat /data/.cpu_mode 2>/dev/null || echo "regular")
+    bundled_version=$(opencode_package_version "${bundled_package}")
+    runtime_version=$(opencode_package_version "${runtime_package}")
+
+    bashio::log.info "Bundled OpenCode version: ${bundled_version}"
+
+    if [ "${OPENCODE_UPDATE_POLICY}" = "latest" ]; then
+        if [ "${runtime_version}" != "not-installed" ]; then
+            bashio::log.info "Persistent OpenCode version before update: ${runtime_version}"
+        fi
+
+        bashio::log.info "Updating persistent OpenCode install: npm install -g opencode-ai@latest"
+        if timeout 300 npm install -g opencode-ai@latest --loglevel=error >/tmp/opencode-npm-install.log 2>&1; then
+            runtime_version=$(opencode_package_version "${runtime_package}")
+            bashio::log.info "Persistent OpenCode version after update: ${runtime_version}"
+        else
+            bashio::log.warning "OpenCode runtime update failed; continuing with existing runtime install or bundled fallback"
+            bashio::log.warning "See /tmp/opencode-npm-install.log inside the container for npm details"
+        fi
+
+        if [ -x "${runtime_package}/bin/opencode.exe" ]; then
+            select_opencode_package_binary "${runtime_package}" "${cpu_mode}" || true
+            runtime_available=true
+        else
+            bashio::log.warning "No persistent OpenCode binary found under ${NPM_CONFIG_PREFIX}; using bundled OpenCode"
+        fi
     fi
-    
-    # Create wrapper script
-    cat > "${wrapper_path}" << 'EOF'
-#!/bin/bash
-# OpenCode wrapper - selects correct binary based on CPU capabilities
 
-CPU_MODE=$(cat /data/.cpu_mode 2>/dev/null || echo "regular")
-ARCH=$(uname -m)
-
-# For baseline mode, try to use baseline binary
-if [ "${CPU_MODE}" = "baseline" ]; then
-    case "${ARCH}" in
-        x86_64)
-            BASELINE_BIN="/usr/local/lib/node_modules/opencode-linux-x64-baseline/bin/opencode"
-            ;;
-        aarch64|arm64)
-            BASELINE_BIN="/usr/local/lib/node_modules/opencode-linux-arm64-baseline/bin/opencode"
-            ;;
-    esac
-    
-    if [ -x "${BASELINE_BIN}" ]; then
-        exec "${BASELINE_BIN}" "$@"
+    if [ "${OPENCODE_UPDATE_POLICY}" = "bundled" ] || [ "${runtime_available}" != "true" ]; then
+        select_opencode_package_binary "${bundled_package}" "${cpu_mode}" || true
     fi
-fi
 
-# Fallback to regular/opencode-ai
-if [ -x "/usr/local/lib/node_modules/opencode-ai/bin/opencode" ]; then
-    exec /usr/local/lib/node_modules/opencode-ai/bin/opencode "$@"
-fi
-
-# Last resort - error out instead of infinite loop
-echo "Error: No OpenCode binary found. Please reinstall the addon." >&2
-exit 1
-EOF
-    
-    chmod +x "${wrapper_path}"
-    bashio::log.info "Created OpenCode wrapper for ${mode} mode"
+    local effective_bin
+    local effective_version
+    effective_bin=$(command -v opencode 2>/dev/null || echo "not-found")
+    effective_version=$(opencode --version 2>/dev/null || echo "unknown")
+    printf '%s\n' "${effective_bin}" > /data/.opencode_bin
+    printf '%s\n' "${effective_version}" > /data/.opencode_version
+    bashio::log.info "Effective OpenCode binary: ${effective_bin}"
+    bashio::log.info "Effective OpenCode version: ${effective_version}"
 }
 
-# Run OpenCode installation
-install_opencode_binary
-
-# Set up persistent HOME for all services
-export HOME="/data"
-export XDG_DATA_HOME="/data/.local/share"
-export XDG_CONFIG_HOME="/data/.config"
-
-# Ensure data directories exist
-mkdir -p /data/.local/share/opencode
-mkdir -p /data/.config/opencode
+setup_opencode_runtime
 
 # ==============================================================================
 # Verify hab and zigporter CLIs are available

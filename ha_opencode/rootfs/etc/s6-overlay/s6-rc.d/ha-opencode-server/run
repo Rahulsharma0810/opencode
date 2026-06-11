@@ -6,6 +6,7 @@
 export HOME="/data"
 export XDG_DATA_HOME="/data/.local/share"
 export XDG_CONFIG_HOME="/data/.config"
+export NPM_CONFIG_PREFIX="/data/.npm-global"
 export NODE_OPTIONS="--max-old-space-size=512"
 
 if [ -f /data/.env_vars ]; then
@@ -14,6 +15,14 @@ fi
 
 if [ -f /data/.env_vars_discovered ]; then
     source /data/.env_vars_discovered
+fi
+
+OPENCODE_UPDATE_POLICY=$(cat /data/.opencode_update_policy 2>/dev/null || echo "latest")
+if [ "${OPENCODE_UPDATE_POLICY}" = "latest" ]; then
+    export PATH="${NPM_CONFIG_PREFIX}/bin:/usr/local/bin:/usr/bin:/bin:${PATH}"
+else
+    export PATH="/usr/local/bin:/usr/bin:/bin:${PATH}"
+    export OPENCODE_DISABLE_AUTOUPDATE=true
 fi
 
 ENABLE_SERVER=$(bashio::config 'enable_server' 2>/dev/null || echo "false")

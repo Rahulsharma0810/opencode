@@ -81,14 +81,6 @@ RUN python3 -m venv /opt/zigporter-venv \
 RUN npm install -g opencode-ai@${OPENCODE_VERSION} prettier ppq-private-mode@${PPQ_PROXY_VERSION} tsx@${TSX_VERSION} \
     && npm cache clean --force
 
-# Pre-install the baseline binary for non-AVX2 x86_64 CPUs so first boot on
-# slow hardware doesn't block on npm (no baseline package exists for ARM64).
-# The runtime existence check in init-opencode remains as a fallback.
-RUN if [ "${BUILD_ARCH}" = "amd64" ]; then \
-        npm install -g "opencode-linux-x64-baseline@${OPENCODE_VERSION}" --force \
-        && npm cache clean --force; \
-    fi
-
 # Copy package.json files first for better layer caching
 # Changes to server code won't invalidate npm install cache
 COPY rootfs/opt/ha-mcp-server/package*.json /opt/ha-mcp-server/

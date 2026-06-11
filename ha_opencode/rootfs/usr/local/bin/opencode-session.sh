@@ -43,28 +43,24 @@ NC='\033[0m'
 CPU_MODE=$(cat /data/.cpu_mode 2>/dev/null || echo "unknown")
 ADDON_VERSION=$(cat /data/.addon_version 2>/dev/null || echo "unknown")
 ADDON_ACCESS_ENABLED=$(cat /data/.addon_access_enabled 2>/dev/null || echo "false")
+OPENCODE_UPDATE_POLICY=$(cat /data/.opencode_update_policy 2>/dev/null || echo "latest")
+OPENCODE_VERSION=$(cat /data/.opencode_version 2>/dev/null || opencode --version 2>/dev/null || echo "unknown")
 CPU_INFO=""
 if [ "${CPU_MODE}" = "baseline" ]; then
     CPU_INFO=" ${YELLOW}(baseline CPU mode)${NC}"
-    case $(uname -m) in
-        x86_64)
-            export OPENCODE_BIN_PATH="/usr/local/lib/node_modules/opencode-linux-x64-baseline/bin/opencode"
-            ;;
-        aarch64|arm64)
-            if [ -x "/usr/local/lib/node_modules/opencode-linux-arm64-baseline/bin/opencode" ]; then
-                export OPENCODE_BIN_PATH="/usr/local/lib/node_modules/opencode-linux-arm64-baseline/bin/opencode"
-            else
-                export OPENCODE_BIN_PATH="/usr/local/lib/node_modules/opencode-ai/bin/opencode"
-            fi
-            ;;
-    esac
 fi
 
 # Change to Home Assistant config directory
 cd /homeassistant
 
-# Set up PATH - ensure node, npm globals, and standard bins are available
-export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+# Set up PATH - prefer the persistent OpenCode install when enabled.
+export NPM_CONFIG_PREFIX="${NPM_CONFIG_PREFIX:-/data/.npm-global}"
+if [ "${OPENCODE_UPDATE_POLICY}" = "latest" ]; then
+    export PATH="${NPM_CONFIG_PREFIX}/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+else
+    export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+    export OPENCODE_DISABLE_AUTOUPDATE=true
+fi
 
 # Configure git if not already configured
 if [ ! -f "${HOME}/.gitconfig" ]; then
@@ -77,6 +73,7 @@ show_banner() {
     clear
     echo ""
     echo -e "${BLUE}${BOLD}OpenCode${NC} ${GRAY}v${ADDON_VERSION}${NC}${CPU_INFO}"
+    echo -e "${GRAY}Runtime: OpenCode ${OPENCODE_VERSION} (${OPENCODE_UPDATE_POLICY})${NC}"
     echo -e "${GRAY}AI-powered coding agent for Home Assistant${NC}"
     echo ""
     echo -e "${GRAY}────────────────────────────────────────────────────────────${NC}"
