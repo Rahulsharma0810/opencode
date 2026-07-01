@@ -1,7 +1,7 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## Unreleased
+## 2.2.0
 
 - **Home Assistant native LLM readiness** — added a read-only `get_agent_capabilities` MCP tool and `ha://agent/capabilities` resource that report OpenCode's MCP surface, current HA version, and whether the running Home Assistant instance exposes the emerging native `llm` component. Documentation now explains the long-term plan: follow HA's LLM platform closely, prefer native capabilities when they become stable and accessible, and keep MCP for add-on/admin/dev/safety workflows.
 - **MCP 2025-11-25 alignment** — updated the MCP TypeScript SDK target to the current `1.29.x` line, added server implementation description metadata, and tightened tool schemas with `additionalProperties: false` per current MCP guidance.
