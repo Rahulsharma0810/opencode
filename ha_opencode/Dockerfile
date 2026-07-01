@@ -39,9 +39,10 @@ ENV NODE_ENV=production \
 # - curl/ca-certificates: For downloading ttyd
 # - procps: Provides pgrep for health check
 # - tmux: Session persistence to prevent multiple OpenCode instances
-# - chromium: Headless browser for screenshot_url MCP tool (visual verification)
+# - build-essential: Required for compiling native dependencies of OpenChamber
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        build-essential \
         ca-certificates \
         chromium \
         curl \
@@ -78,7 +79,7 @@ RUN python3 -m venv /opt/zigporter-venv \
 # - Prettier: Code formatter for YAML files, configured for HA conventions
 # - ppq-private-mode: local OpenAI-compatible encryption proxy for PPQ TEE models
 # - tsx: pinned runtime for the PPQ package's TypeScript entrypoint
-RUN npm install -g opencode-ai@${OPENCODE_VERSION} prettier ppq-private-mode@${PPQ_PROXY_VERSION} tsx@${TSX_VERSION} \
+RUN npm install -g opencode-ai@${OPENCODE_VERSION} prettier ppq-private-mode@${PPQ_PROXY_VERSION} tsx@${TSX_VERSION} @openchamber/web \
     && npm cache clean --force
 
 # Copy package.json files first for better layer caching
@@ -99,6 +100,7 @@ RUN chmod +x /usr/local/bin/* \
     && chmod +x /etc/s6-overlay/s6-rc.d/init-opencode/run \
     && chmod +x /etc/s6-overlay/s6-rc.d/ha-opencode/run \
     && chmod +x /etc/s6-overlay/s6-rc.d/ha-opencode-server/run \
+    && chmod +x /etc/s6-overlay/s6-rc.d/openchamber/run \
     && chmod +x /etc/s6-overlay/s6-rc.d/ppq-private-proxy/run \
     && chmod +x /etc/profile.d/hab-esphome.sh \
     && chmod +x /etc/profile.d/zigporter-z2m.sh \
