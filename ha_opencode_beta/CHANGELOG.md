@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 2.3.0b0
+
+- **Experimental OpenChamber interface mode** — added a beta-only `interface_mode` option. The default `terminal` mode keeps the existing ttyd/tmux sidebar terminal unchanged; `openchamber` starts the pinned `@openchamber/web` UI behind Home Assistant Ingress.
+- **Ingress-safe OpenChamber runtime** — OpenChamber binds only to `127.0.0.1` inside the container, with a first-party ingress proxy on internal port `8099` forwarding authenticated Home Assistant Ingress traffic. No OpenChamber LAN port is exposed by default.
+- **Pinned bundle adaptation** — patches the pinned OpenChamber web bundle at image build time so root-hosted assets, API calls, SSE, and websockets resolve under Home Assistant's `/api/hassio_ingress/...` path.
+
 ## 2.1.1b1
 
 - **Terminal and runtime hardening** — `SUPERVISOR_TOKEN` is no longer persisted as `HA_TOKEN` in `/data/.env_vars`, OpenCode uses an app-managed executable temp directory for native TUI files, and the web terminal now translates one-finger touch drags into scroll events for mobile/tablet use.

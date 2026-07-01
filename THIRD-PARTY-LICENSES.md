@@ -29,6 +29,7 @@ retain their respective licenses.
 |-----------|---------|--------|
 | ttyd | MIT | https://github.com/tsl0922/ttyd |
 | OpenCode | MIT | https://github.com/opencode-ai/opencode |
+| OpenChamber | MIT | https://github.com/btriapitsyn/openchamber |
 | Prettier | MIT | https://github.com/prettier/prettier |
 | Node.js | MIT | https://github.com/nodejs/node |
 | Home Assistant base image | Apache-2.0 | https://github.com/home-assistant/docker-base |

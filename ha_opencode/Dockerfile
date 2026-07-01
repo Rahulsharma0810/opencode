@@ -24,6 +24,7 @@ ARG BUILD_VERSION
 ARG BUILD_ARCH
 ARG TTYD_VERSION=1.7.7
 ARG OPENCODE_VERSION=latest
+ARG OPENCHAMBER_VERSION=1.13.8
 ARG PPQ_PROXY_VERSION=0.1.0
 ARG TSX_VERSION=4.20.6
 
@@ -40,13 +41,16 @@ ENV NODE_ENV=production \
 # - procps: Provides pgrep for health check
 # - tmux: Session persistence to prevent multiple OpenCode instances
 # - chromium: Headless browser for screenshot_url MCP tool (visual verification)
+# - g++/make: native fallback builds for OpenChamber dependencies on all arches
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         chromium \
         curl \
+        g++ \
         git \
         jq \
+        make \
         nodejs \
         npm \
         procps \
@@ -73,12 +77,13 @@ RUN python3 -m venv /opt/zigporter-venv \
     && /opt/zigporter-venv/bin/pip install --no-cache-dir zigporter \
     && ln -s /opt/zigporter-venv/bin/zigporter /usr/local/bin/zigporter
 
-# Install OpenCode, Prettier, and the PPQ private-mode proxy globally
+# Install OpenCode, OpenChamber, Prettier, and the PPQ private-mode proxy globally
 # - OpenCode: AI coding agent (pin version in build.yaml for reproducible builds)
+# - OpenChamber: browser UI for OpenCode (pinned; patched below for HA Ingress)
 # - Prettier: Code formatter for YAML files, configured for HA conventions
 # - ppq-private-mode: local OpenAI-compatible encryption proxy for PPQ TEE models
 # - tsx: pinned runtime for the PPQ package's TypeScript entrypoint
-RUN npm install -g opencode-ai@${OPENCODE_VERSION} prettier ppq-private-mode@${PPQ_PROXY_VERSION} tsx@${TSX_VERSION} \
+RUN npm install -g opencode-ai@${OPENCODE_VERSION} @openchamber/web@${OPENCHAMBER_VERSION} prettier ppq-private-mode@${PPQ_PROXY_VERSION} tsx@${TSX_VERSION} \
     && npm cache clean --force
 
 # Copy package.json files first for better layer caching
@@ -94,10 +99,16 @@ RUN (cd /opt/ha-mcp-server && npm install --omit=dev) & \
 # Copy root filesystem (server code, scripts, etc.)
 COPY rootfs /
 
+# OpenChamber is a generic root-hosted web app. Patch the pinned bundle so its
+# static assets and runtime API URLs resolve under Home Assistant's Ingress path.
+RUN node /opt/openchamber/patch-ingress.js
+
 # Make scripts executable and create runtime directories
 RUN chmod +x /usr/local/bin/* \
+    && chmod +x /opt/openchamber/patch-ingress.js \
     && chmod +x /etc/s6-overlay/s6-rc.d/init-opencode/run \
     && chmod +x /etc/s6-overlay/s6-rc.d/ha-opencode/run \
+    && chmod +x /etc/s6-overlay/s6-rc.d/ha-openchamber/run \
     && chmod +x /etc/s6-overlay/s6-rc.d/ha-opencode-server/run \
     && chmod +x /etc/s6-overlay/s6-rc.d/ppq-private-proxy/run \
     && chmod +x /etc/profile.d/hab-esphome.sh \
@@ -125,9 +136,9 @@ RUN set -e; \
 # Set working directory to HA config (mounted at runtime)
 WORKDIR /homeassistant
 
-# Health check - verify ttyd is running
+# Health check - verify the active ingress service is responding
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD pgrep ttyd > /dev/null || exit 1
+    CMD curl -fsS --max-time 5 http://127.0.0.1:8099/ > /dev/null || exit 1
 
 # Labels for Home Assistant
 LABEL \

@@ -6,7 +6,7 @@ This is the **beta channel** for the OpenCode add-on. It contains experimental f
 
 ## Current Beta Changes
 
-- **Beta baseline reset**: `1.9.0b0` is based on the current stable OpenCode add-on release and does not include beta-only feature changes yet.
+- **OpenChamber interface mode**: New experimental `openchamber` interface mode starts the OpenChamber web UI behind Home Assistant Ingress, while the default `terminal` mode keeps the existing ttyd terminal unchanged.
 - **Serial device access**: Selected host UART/serial devices can be mapped into the add-on for USB flashing and adapter inspection workflows. Full Supervisor `uart` and `udev` manifest flags remain disabled by default because they are static permissions, not runtime user options.
 - **Optional LAN server mode**: You can now enable an OpenCode server bound to `0.0.0.0` so other computers on your local network can connect directly.
 - **PPQ private TEE models**: Opt-in encrypted proxy for PPQ private models running in remote TEEs. The proxy is internal-only and binds to `127.0.0.1` inside the add-on container.
@@ -29,6 +29,31 @@ OpenCode snapshots are disabled by default in this add-on to reduce memory and d
 By default, **OpenCode Update Policy** is set to `latest`. The add-on installs or updates OpenCode in `/data/.npm-global` and uses that persistent install before the image-bundled fallback. Set the policy to `bundled` to use only the OpenCode version included in the add-on image and disable OpenCode self-update.
 
 For x64 VM installs, make sure the guest can see AVX2 when the host supports it. Generic QEMU/KVM CPU models can hide AVX2 and force OpenCode's baseline binary.
+
+## Interface Mode (Beta)
+
+The beta add-on can show either the existing terminal interface or the experimental OpenChamber web UI in the Home Assistant sidebar.
+
+Modes:
+
+- `terminal`: default. Uses the existing ttyd terminal and tmux session.
+- `openchamber`: starts OpenChamber behind Home Assistant Ingress on the same sidebar entry.
+
+To test OpenChamber:
+
+1. In the add-on **Configuration** tab, set **Interface Mode** to `openchamber`.
+2. Save and restart the add-on.
+3. Open **OpenCode Beta** from the Home Assistant sidebar.
+
+Security and networking notes:
+
+- OpenChamber is not exposed through a Home Assistant Network port by default.
+- The OpenChamber process binds to `127.0.0.1` inside the container.
+- A small first-party ingress proxy binds to internal port `8099`, accepts Home Assistant Ingress traffic, and forwards to OpenChamber locally.
+- Home Assistant Ingress provides the browser authentication layer, so no separate OpenChamber UI password is configured for this mode.
+- LAN access remains the separate opt-in **OpenCode LAN Server** feature on port `4096`.
+
+Known beta risk: OpenChamber is a root-hosted web app, so this beta includes a pinned bundle patch for Home Assistant's `/api/hassio_ingress/...` path. If the page loads but actions fail, switch **Interface Mode** back to `terminal`, restart the add-on, and include logs when reporting the issue.
 
 ## Zigbee2MQTT URL
 
