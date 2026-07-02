@@ -74,8 +74,8 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: true
           tags: |
-            ${{ env.REGISTRY }}/rahulsharma0810/${{ env.IMAGE_NAME }}/${{ matrix.ha_arch }}:${{ steps.version.outputs.version }}
-            ${{ env.REGISTRY }}/rahulsharma0810/${{ env.IMAGE_NAME }}/${{ matrix.ha_arch }}:latest
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}/${{ matrix.ha_arch }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}/${{ matrix.ha_arch }}:latest
           build-args: |
             BUILD_FROM=ghcr.io/home-assistant/base-debian:trixie
             BUILD_VERSION=${{ steps.version.outputs.version }}
@@ -127,7 +127,7 @@ jobs:
       - name: Create multi-arch manifest
         shell: bash
         env:
-          IMAGE: ${{ env.REGISTRY }}/rahulsharma0810/${{ env.IMAGE_NAME }}
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           docker buildx imagetools create \
@@ -139,7 +139,7 @@ jobs:
       - name: Inspect multi-arch manifest
         shell: bash
         env:
-          IMAGE: ${{ env.REGISTRY }}/rahulsharma0810/${{ env.IMAGE_NAME }}
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
           VERSION: ${{ steps.version.outputs.version }}
         run: docker buildx imagetools inspect "${IMAGE}:${VERSION}"
 
@@ -147,7 +147,7 @@ jobs:
         if: github.event_name == 'push'
         shell: bash
         env:
-          IMAGE: ${{ env.REGISTRY }}/rahulsharma0810/${{ env.IMAGE_NAME }}
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           docker buildx imagetools inspect "${IMAGE}:${VERSION}" > image-manifest.txt
