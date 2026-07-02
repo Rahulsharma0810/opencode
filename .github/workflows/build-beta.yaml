@@ -1,24 +1,24 @@
 ---
-name: Build
-run-name: "Build ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}"
+name: Build Beta
+run-name: "Build Beta ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}"
 
 on:
   push:
     tags:
-      - 'v*'
+      - 'beta-v*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g., 2.0.0)'
+        description: 'Version tag (e.g., 2.0.3b1)'
         required: true
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ha_opencode
+  IMAGE_NAME: ha_opencode_beta
 
 jobs:
   build:
-    name: Build ${{ matrix.ha_arch }}
+    name: Build Beta ${{ matrix.ha_arch }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -44,12 +44,12 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "push" ]; then
             VERSION="${{ github.ref_name }}"
-            VERSION="${VERSION#v}"
+            VERSION="${VERSION#beta-v}"
           else
             VERSION="${{ github.event.inputs.version }}"
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Building version: ${VERSION}"
+          echo "Building beta version: ${VERSION}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -80,14 +80,15 @@ jobs:
           labels: |
             io.hass.arch=${{ matrix.ha_arch }}
             io.hass.version=${{ steps.version.outputs.version }}
-            org.opencontainers.image.title=OpenCode
-            org.opencontainers.image.description=AI coding agent for Home Assistant
+            org.opencontainers.image.title=OpenCode Beta
+            org.opencontainers.image.description=Beta channel for OpenCode - AI coding agent for Home Assistant
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.licenses=Unlicense
+            io.hass.name=OpenCode Beta
 
   manifest:
-    name: Publish multi-arch manifest
+    name: Publish Beta multi-arch manifest
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -101,7 +102,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "push" ]; then
             VERSION="${{ github.ref_name }}"
-            VERSION="${VERSION#v}"
+            VERSION="${VERSION#beta-v}"
           else
             VERSION="${{ github.event.inputs.version }}"
           fi
