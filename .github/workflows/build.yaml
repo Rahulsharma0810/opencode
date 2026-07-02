@@ -1,6 +1,6 @@
 ---
 name: Build
-run-name: "Build ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.event_name == 'schedule' && 'daily-cron' || github.ref_name }}"
+run-name: "Build ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}"
 
 on:
   push:
@@ -20,52 +20,8 @@ env:
   IMAGE_NAME: ha_opencode
 
 jobs:
-  prepare:
-    name: Prepare and Update Metadata
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          ref: ${{ github.ref }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Update Addon Metadata
-        run: |
-          python scripts/update-addon-metadata.py
-
-      - name: Commit updated metadata
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add ha_opencode/config.yaml ha_opencode/CHANGELOG.md README.md
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "chore: auto-update metadata [skip ci]"
-            git push
-          fi
-
-      - name: Get version
-        id: version
-        shell: bash
-        run: |
-          VERSION=$(grep -E "^version:" ha_opencode/config.yaml | sed -E 's/^version:[[:space:]]*"([^"]+)"/\1/')
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Building version: ${VERSION}"
-
   build:
     name: Build ${{ matrix.ha_arch }}
-    needs: prepare
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -84,12 +40,21 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
-        with:
-          ref: ${{ github.ref }}
 
-      - name: Pull latest changes (including prepare commit)
+      - name: Get version
+        id: version
+        shell: bash
         run: |
-          git pull
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          elif [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="latest"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Building version: ${VERSION}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -109,32 +74,46 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: true
           tags: |
-            ${{ env.REGISTRY }}/rahulsharma0810/${{ env.IMAGE_NAME }}/${{ matrix.ha_arch }}:${{ needs.prepare.outputs.version }}
+            ${{ env.REGISTRY }}/rahulsharma0810/${{ env.IMAGE_NAME }}/${{ matrix.ha_arch }}:${{ steps.version.outputs.version }}
             ${{ env.REGISTRY }}/rahulsharma0810/${{ env.IMAGE_NAME }}/${{ matrix.ha_arch }}:latest
           build-args: |
             BUILD_FROM=ghcr.io/home-assistant/base-debian:trixie
-            BUILD_VERSION=${{ needs.prepare.outputs.version }}
+            BUILD_VERSION=${{ steps.version.outputs.version }}
             BUILD_ARCH=${{ matrix.ha_arch }}
           cache-from: type=gha,scope=${{ env.IMAGE_NAME }}-${{ matrix.ha_arch }}
           cache-to: type=gha,mode=max,scope=${{ env.IMAGE_NAME }}-${{ matrix.ha_arch }}
           labels: |
             io.hass.arch=${{ matrix.ha_arch }}
-            io.hass.version=${{ needs.prepare.outputs.version }}
-            org.opencontainers.image.title=OpenCode-OpenChamber
-            org.opencontainers.image.description=AI coding agent & workspace for Home Assistant
-            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            io.hass.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.title=OpenCode
+            org.opencontainers.image.description=AI coding agent for Home Assistant
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.licenses=Unlicense
 
   manifest:
     name: Publish multi-arch manifest
-    needs: [prepare, build]
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
       packages: write
 
     steps:
+      - name: Get version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          elif [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="latest"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -149,7 +128,7 @@ jobs:
         shell: bash
         env:
           IMAGE: ${{ env.REGISTRY }}/rahulsharma0810/${{ env.IMAGE_NAME }}
-          VERSION: ${{ needs.prepare.outputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           docker buildx imagetools create \
             --tag "${IMAGE}:${VERSION}" \
@@ -161,15 +140,15 @@ jobs:
         shell: bash
         env:
           IMAGE: ${{ env.REGISTRY }}/rahulsharma0810/${{ env.IMAGE_NAME }}
-          VERSION: ${{ needs.prepare.outputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: docker buildx imagetools inspect "${IMAGE}:${VERSION}"
 
       - name: Write release image assets
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push'
         shell: bash
         env:
           IMAGE: ${{ env.REGISTRY }}/rahulsharma0810/${{ env.IMAGE_NAME }}
-          VERSION: ${{ needs.prepare.outputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           docker buildx imagetools inspect "${IMAGE}:${VERSION}" > image-manifest.txt
           {
@@ -192,7 +171,7 @@ jobs:
           } > container-images.md
 
       - name: Upload image assets to GitHub Release
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
