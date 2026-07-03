@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 2.3.0b4
+
+- **Fix OpenChamber dynamic asset loading under ingress** — patch OpenChamber's Vite preload helper and remaining worker/icon asset literals so dynamically loaded CSS, chunks, and workers stay under Home Assistant's `/api/hassio_ingress/...` path instead of requesting `/assets/...` from the HA root.
+
 ## 2.3.0b3
 
 - **Fix empty OpenChamber ingress response** — request identity encoding from the upstream OpenChamber server and decode/strip compression headers when rewriting HTML, preventing Home Assistant from receiving an empty `content-encoding: deflate` page.

@@ -20,6 +20,16 @@ function replaceOnce(content, search, replacement, label) {
   return content.replace(search, replacement);
 }
 
+function replaceRegexOnce(content, pattern, replacement, label) {
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  const globalPattern = new RegExp(pattern.source, flags);
+  const matches = [...content.matchAll(globalPattern)];
+  if (matches.length !== 1) {
+    fail(`${label} expected 1 match, found ${matches.length}`);
+  }
+  return content.replace(pattern, replacement);
+}
+
 function writeIfChanged(filePath, content) {
   const current = fs.readFileSync(filePath, "utf8");
   if (current !== content) {
@@ -44,6 +54,12 @@ if (!fs.existsSync(assetsDir)) {
 
 let html = fs.readFileSync(indexPath, "utf8");
 html = html.replace(/\s*<script\b[^>]*\bdata-ha-ingress-runtime\b[^>]*>[\s\S]*?<\/script>/g, "");
+html = replaceOnce(
+  html,
+  "const baseUrl = location.origin;",
+  "const ingressBaseMatch = location.pathname.match(/^(\\/api\\/hassio_ingress\\/[^/]+)/);\n      const baseUrl = location.origin + (ingressBaseMatch ? ingressBaseMatch[1] : '');",
+  "PWA manifest base URL"
+);
 if (!html.includes("data-ha-ingress-runtime")) {
   html = html.replace(
     /\s*<script type="module"/,
@@ -69,6 +85,7 @@ const apiBuilderReplacement = "const o=t?e.trim().replace(/^\\/+/,\"\"):qo(e);if
 let patchedRuntimeUrl = false;
 let patchedApiBuilder = false;
 let patchedServiceWorker = false;
+let patchedViteAssetsUrl = false;
 
 for (const filePath of jsFiles) {
   let content = fs.readFileSync(filePath, "utf8");
@@ -104,9 +121,29 @@ for (const filePath of jsFiles) {
     patchedServiceWorker = true;
   }
 
+  if (/assetsURL=function\((\w+)\)\{return"\/"\+\1\}/.test(content)) {
+    content = replaceRegexOnce(
+      content,
+      /assetsURL=function\((\w+)\)\{return"\/"\+\1\}/,
+      'assetsURL=function($1){return $1}',
+      "Vite preload asset URL helper"
+    );
+    patchedViteAssetsUrl = true;
+  }
+
+  content = content.replace(/(["'`])\/assets\//g, "$1assets/");
+
   if (content !== original) {
     fs.writeFileSync(filePath, content);
   }
+}
+
+const rootAssetReferences = jsFiles.flatMap((filePath) => {
+  const content = fs.readFileSync(filePath, "utf8");
+  return /["'`]\/assets\//.test(content) ? [path.basename(filePath)] : [];
+});
+if (rootAssetReferences.length > 0) {
+  fail(`root asset references remain in JS: ${rootAssetReferences.join(", ")}`);
 }
 
 if (!patchedRuntimeUrl) {
@@ -117,6 +154,9 @@ if (!patchedApiBuilder) {
 }
 if (!patchedServiceWorker) {
   fail("service worker registration pattern not found");
+}
+if (!patchedViteAssetsUrl) {
+  fail("Vite preload asset URL helper pattern not found");
 }
 
 console.log("OpenChamber bundle patched for Home Assistant Ingress");
