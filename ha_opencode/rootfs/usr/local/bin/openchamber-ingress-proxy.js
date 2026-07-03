@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const http = require("http");
 const net = require("net");
+const zlib = require("zlib");
 
 const LISTEN_HOST = process.env.OPENCHAMBER_INGRESS_HOST || "0.0.0.0";
 const LISTEN_PORT = Number.parseInt(process.env.OPENCHAMBER_INGRESS_PORT || "8099", 10);
@@ -133,6 +134,15 @@ function transformHtml(html, ingressPath) {
   });
 }
 
+function decodeBody(buffer, contentEncoding) {
+  const encoding = String(contentEncoding || "").trim().toLowerCase();
+  if (!encoding || encoding === "identity") return buffer;
+  if (encoding === "gzip") return zlib.gunzipSync(buffer);
+  if (encoding === "deflate") return zlib.inflateSync(buffer);
+  if (encoding === "br") return zlib.brotliDecompressSync(buffer);
+  throw new Error(`Unsupported content encoding: ${contentEncoding}`);
+}
+
 function proxyRequest(req, res) {
   const remoteAddress = normalizeRemoteAddress(req.socket.remoteAddress || "");
   if (!isAllowedRemote(remoteAddress)) {
@@ -155,6 +165,7 @@ function proxyRequest(req, res) {
 
   const headers = { ...req.headers };
   headers.host = `${UPSTREAM_HOST}:${UPSTREAM_PORT}`;
+  headers["accept-encoding"] = "identity";
   headers["x-forwarded-host"] = req.headers["x-forwarded-host"] || req.headers.host || "";
   headers["x-forwarded-proto"] = forwardedProto(req);
   headers["x-forwarded-for"] = req.headers["x-forwarded-for"]
@@ -183,8 +194,11 @@ function proxyRequest(req, res) {
     const chunks = [];
     upstreamRes.on("data", (chunk) => chunks.push(chunk));
     upstreamRes.on("end", () => {
-      const body = transformHtml(Buffer.concat(chunks).toString("utf8"), ingressPath);
+      const decoded = decodeBody(Buffer.concat(chunks), responseHeaders["content-encoding"]);
+      const body = transformHtml(decoded.toString("utf8"), ingressPath);
       delete responseHeaders["content-length"];
+      delete responseHeaders["content-encoding"];
+      delete responseHeaders.etag;
       res.writeHead(upstreamRes.statusCode || 200, responseHeaders);
       res.end(body);
     });

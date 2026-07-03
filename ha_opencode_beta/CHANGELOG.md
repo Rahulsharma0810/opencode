@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 2.3.0b3
+
+- **Fix empty OpenChamber ingress response** — request identity encoding from the upstream OpenChamber server and decode/strip compression headers when rewriting HTML, preventing Home Assistant from receiving an empty `content-encoding: deflate` page.
+
 ## 2.3.0b2
 
 - **Fix OpenChamber under stripped Home Assistant ingress paths** — load the ingress runtime through a relative external script, derive `/api/hassio_ingress/...` in the browser instead of relying on proxy headers, and inject the ingress `<base>` tag before OpenChamber modules/CSS resolve.
