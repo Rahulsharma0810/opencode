@@ -100,6 +100,31 @@ function ingressRuntimeScript(ingressPath) {
     + `  window.__OPENCHAMBER_GET_PWA_INSTALL_NAME__ ||= () => "OpenChamber";\n`
     + `  window.__OPENCHAMBER_SET_PWA_INSTALL_NAME__ ||= (value) => value || "OpenChamber";\n`
     + `  window.__OPENCHAMBER_SET_PWA_ORIENTATION__ ||= (value) => value || "system";\n`
+    + `  if (basePath && typeof window.fetch === "function" && !window.__OPENCHAMBER_INGRESS_FETCH_PATCHED__) {\n`
+    + `    window.__OPENCHAMBER_INGRESS_FETCH_PATCHED__ = true;\n`
+    + `    const originalFetch = window.fetch.bind(window);\n`
+    + `    const shouldPrefix = (pathname) => pathname === "/api" || pathname.startsWith("/api/") || pathname === "/auth" || pathname.startsWith("/auth/") || pathname === "/health";\n`
+    + `    const rewriteInput = (input) => {\n`
+    + `      const rawUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input?.url;\n`
+    + `      if (typeof rawUrl !== "string" || rawUrl.length === 0) return null;\n`
+    + `      try {\n`
+    + `        const url = new URL(rawUrl, window.location.href);\n`
+    + `        if (url.origin !== window.location.origin) return null;\n`
+    + `        if (url.pathname === basePath || url.pathname.startsWith(basePath + "/")) return null;\n`
+    + `        if (!shouldPrefix(url.pathname)) return null;\n`
+    + `        url.pathname = basePath + url.pathname;\n`
+    + `        return url.toString();\n`
+    + `      } catch {\n`
+    + `        return null;\n`
+    + `      }\n`
+    + `    };\n`
+    + `    window.fetch = (input, init) => {\n`
+    + `      const rewritten = rewriteInput(input);\n`
+    + `      if (!rewritten) return originalFetch(input, init);\n`
+    + `      if (input instanceof Request) return originalFetch(new Request(rewritten, input), init);\n`
+    + `      return originalFetch(rewritten, init);\n`
+    + `    };\n`
+    + `  }\n`
     + `})();\n`;
 }
 

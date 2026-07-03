@@ -79,6 +79,9 @@ writeIfChanged(indexPath, html);
 const jsFiles = fs.readdirSync(assetsDir)
   .filter((name) => name.endsWith(".js"))
   .map((name) => path.join(assetsDir, name));
+const cssFiles = fs.readdirSync(assetsDir)
+  .filter((name) => name.endsWith(".css"))
+  .map((name) => path.join(assetsDir, name));
 
 const apiBuilderReplacement = "const o=t?e.trim().replace(/^\\/+/,\"\"):qo(e);if(!t)return Jo(o,r);const n=new URL(o,`${t}/`);";
 
@@ -144,6 +147,26 @@ const rootAssetReferences = jsFiles.flatMap((filePath) => {
 });
 if (rootAssetReferences.length > 0) {
   fail(`root asset references remain in JS: ${rootAssetReferences.join(", ")}`);
+}
+
+for (const filePath of cssFiles) {
+  const content = fs.readFileSync(filePath, "utf8");
+  const patched = content
+    .replace(/url\(\/assets\//g, "url(assets/")
+    .replace(/url\(\"\/assets\//g, 'url("assets/')
+    .replace(/url\('\/assets\//g, "url('assets/");
+
+  if (content !== patched) {
+    fs.writeFileSync(filePath, patched);
+  }
+}
+
+const cssRootAssetReferences = cssFiles.flatMap((filePath) => {
+  const content = fs.readFileSync(filePath, "utf8");
+  return /url\((?:["'])?\/assets\//.test(content) ? [path.basename(filePath)] : [];
+});
+if (cssRootAssetReferences.length > 0) {
+  fail(`root asset references remain in CSS: ${cssRootAssetReferences.join(", ")}`);
 }
 
 if (!patchedRuntimeUrl) {

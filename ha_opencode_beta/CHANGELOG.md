@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 2.3.0b5
+
+- **Fix remaining OpenChamber ingress API and font routing** — patch CSS font URLs so IBM Plex fonts load through Home Assistant ingress, and add a runtime fetch guard that keeps root `/api`, `/auth`, and `/health` requests under `/api/hassio_ingress/...` before OpenChamber initializes.
+
 ## 2.3.0b4
 
 - **Fix OpenChamber dynamic asset loading under ingress** — patch OpenChamber's Vite preload helper and remaining worker/icon asset literals so dynamically loaded CSS, chunks, and workers stay under Home Assistant's `/api/hassio_ingress/...` path instead of requesting `/assets/...` from the HA root.
