@@ -6,6 +6,7 @@ OpenCode is an AI-powered coding agent that helps you edit and manage your Home 
 
 - **AI-Powered Editing**: Use natural language to modify your Home Assistant configuration
 - **Modern Terminal**: Beautiful web-based terminal with 10 theme options
+- **OpenChamber Web UI**: Optional graphical interface for OpenCode, served through the same sidebar entry
 - **Log Access**: View Home Assistant Core, Supervisor, and host logs
 - **Ingress Support**: Access directly from the Home Assistant sidebar
 - **Provider Agnostic**: Works with Anthropic, OpenAI, Google, and 70+ other AI providers
@@ -30,6 +31,33 @@ Configure the app from the **Configuration** tab in the app page.
 | **Screenshot Tool** | `false` | Enable visual verification of dashboards and UI pages. Uses headless Chromium to capture screenshots that vision-capable AI models can analyze. Requires a Long-Lived Access Token. See [Visual Verification](#visual-verification-screenshots). |
 | **Enable PPQ Private TEE Models (Beta)** | `false` | Start an internal PPQ private-mode encryption proxy and add it as an OpenCode provider. Requires **PPQ API Key**. This feature is included in stable releases, but should still be considered beta. See [PPQ Private TEE Models (Beta)](#ppq-private-tee-models-beta). |
 | **Enable OpenCode LAN Server** | `false` | Start an OpenCode server on internal port `4096` so clients on your local network can attach with the OpenCode CLI. Also requires mapping `4096/tcp` in the add-on Network settings. See [LAN Server Mode](#lan-server-mode). |
+| **Interface Mode** | `terminal` | Choose the browser interface shown in the sidebar: the classic `terminal` or the `openchamber` web UI. See [Interface Mode](#interface-mode). |
+
+### Interface Mode
+
+The add-on can show either the terminal interface or the OpenChamber web UI in the Home Assistant sidebar.
+
+Modes:
+
+- `terminal`: default. Uses the ttyd terminal and tmux session.
+- `openchamber`: serves the OpenChamber web UI behind Home Assistant Ingress on the same sidebar entry.
+
+To switch to OpenChamber:
+
+1. In the add-on **Configuration** tab, set **Interface Mode** to `openchamber`.
+2. Save and restart the add-on.
+3. Open **OpenCode** from the Home Assistant sidebar.
+
+Security and networking notes:
+
+- OpenChamber is not exposed through a Home Assistant Network port.
+- The OpenChamber process binds to `127.0.0.1` inside the container.
+- A small first-party ingress proxy binds to internal port `8099`, accepts Home Assistant Ingress traffic, and forwards to OpenChamber locally.
+- Home Assistant Ingress provides the browser authentication layer, so no separate OpenChamber UI password is needed.
+- LAN access remains the separate opt-in **OpenCode LAN Server** feature on port `4096`.
+
+If OpenChamber misbehaves (for example after an update), switch **Interface Mode** back to `terminal`, restart the add-on, and include logs when reporting the issue.
+
 ### Terminal Appearance
 
 | Option | Default | Description |

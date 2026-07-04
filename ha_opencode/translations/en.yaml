@@ -15,7 +15,11 @@ configuration:
   opencode_update_policy:
     name: "OpenCode Update Policy"
     description: "Controls how OpenCode itself is updated. 'latest' installs and updates OpenCode in persistent add-on data so it can follow upstream releases independently of add-on releases. 'bundled' uses only the OpenCode version included in the add-on image and disables OpenCode self-update."
-  
+
+  interface_mode:
+    name: "Interface Mode"
+    description: "Choose the browser interface shown in the Home Assistant sidebar. 'terminal' is the classic ttyd terminal. 'openchamber' serves the OpenChamber web UI through Home Assistant Ingress. If OpenChamber misbehaves, switch back to 'terminal' and restart the add-on. Changing this option requires restarting the add-on."
+
   terminal_theme:
     name: "Terminal Theme"
     description: "Color scheme for the terminal. Choose a theme that's easy on your eyes."

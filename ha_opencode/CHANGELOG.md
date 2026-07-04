@@ -1,6 +1,10 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## 2.3.0
+
+- **OpenChamber web UI** — new **Interface Mode** option (`terminal`/`openchamber`). The default `terminal` keeps the existing ttyd terminal unchanged; `openchamber` serves the OpenChamber web UI (pinned `@openchamber/web` 1.13.9) through Home Assistant Ingress on the same sidebar entry. OpenChamber binds to `127.0.0.1` inside the container behind a first-party ingress proxy, no LAN port is exposed, and Home Assistant Ingress provides the browser authentication layer. The bundle is patched at image build time so assets, API calls, SSE, and websockets resolve correctly under `/api/hassio_ingress/...`. Promoted from the beta channel after validation through beta 2.3.0b0–2.3.0b8.
+
 ## 2.2.0
 
 - **Home Assistant native LLM readiness** — added a read-only `get_agent_capabilities` MCP tool and `ha://agent/capabilities` resource that report OpenCode's MCP surface, current HA version, and whether the running Home Assistant instance exposes the emerging native `llm` component. Documentation now explains the long-term plan: follow HA's LLM platform closely, prefer native capabilities when they become stable and accessible, and keep MCP for add-on/admin/dev/safety workflows.
