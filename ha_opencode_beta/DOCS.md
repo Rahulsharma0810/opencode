@@ -22,7 +22,7 @@ Treat `/addon_configs` as sensitive because it may contain configuration data fo
 
 ## Resource Usage
 
-OpenCode snapshots are disabled by default in this add-on to reduce memory and disk pressure on Home Assistant systems. File watching also ignores noisy internal paths such as `.storage/`, `.cloud/`, caches, logs, and the Home Assistant database. You can override these defaults with **Custom OpenCode Configuration (JSON)** if you need OpenCode's built-in snapshot/undo behavior.
+OpenCode snapshots are disabled by default in this add-on to reduce memory and disk pressure on Home Assistant systems. File watching also ignores noisy internal paths such as `.storage/`, `.cloud/`, caches, logs, and the Home Assistant database. You can override these defaults with **Custom OpenCode configuration** if you need OpenCode's built-in snapshot/undo behavior.
 
 ## OpenCode Updates
 
@@ -41,7 +41,7 @@ Modes:
 
 To test OpenChamber:
 
-1. In the add-on **Configuration** tab, set **Interface Mode** to `openchamber`.
+1. In the add-on **Configuration** tab, set **Interface mode** to `openchamber`.
 2. Save and restart the add-on.
 3. Open **OpenCode Beta** from the Home Assistant sidebar.
 
@@ -53,7 +53,7 @@ Security and networking notes:
 - Home Assistant Ingress provides the browser authentication layer, so no separate OpenChamber UI password is configured for this mode.
 - LAN access remains the separate opt-in **OpenCode LAN Server** feature on port `4096`.
 
-Known beta risk: OpenChamber is a root-hosted web app, so this beta includes a pinned bundle patch for Home Assistant's `/api/hassio_ingress/...` path. If the page loads but actions fail, switch **Interface Mode** back to `terminal`, restart the add-on, and include logs when reporting the issue.
+Known beta risk: OpenChamber is a root-hosted web app, so this beta includes a pinned bundle patch for Home Assistant's `/api/hassio_ingress/...` path. If the page loads but actions fail, switch **Interface mode** back to `terminal`, restart the add-on, and include logs when reporting the issue.
 
 ## Zigbee2MQTT URL
 

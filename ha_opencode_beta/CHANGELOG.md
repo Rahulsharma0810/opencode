@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Configuration UI polish** — options are now grouped and ordered the way they render in the Configuration tab (interface first, then appearance, Home Assistant integration, runtime, integrations, privacy/network, advanced). Labels follow Home Assistant's sentence-case convention with parallel naming for toggles, descriptions use one consistent style for quoting and punctuation, and stable/beta wording drift was eliminated. Also adds the missing `.env_vars_discovered` backup exclusion on the beta channel.
+
 ## 2.3.0b8
 
 - **OpenChamber updated to 1.13.9** — bumped the pinned `@openchamber/web` version. All five Home Assistant ingress patches are still required and carry forward unchanged in effect; upstream 1.13.9 does not fix any of the ingress issues this add-on patches around. Verified end-to-end against an emulated Supervisor ingress with a headless browser: no URL re-prefixing, no `text/html` API responses, clean bootstrap.

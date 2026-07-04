@@ -22,18 +22,13 @@ OpenCode is an AI-powered coding agent that helps you edit and manage your Home 
 
 Configure the app from the **Configuration** tab in the app page.
 
-### Feature Options
+The options below appear in the same order and groups as the Configuration tab.
+
+### Interface Mode
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| **Enable MCP Home Assistant Integration** | `true` | Enable the Model Context Protocol (MCP) server for deep Home Assistant integration. Includes 35 tools, 14 resources, 6 guided prompts, and an intelligence layer for anomaly detection, config validation, and automation suggestions. |
-| **Enable LSP Home Assistant Integration** | `true` | Enable the Language Server Protocol (LSP) server for intelligent YAML editing. Provides entity/service autocomplete, hover documentation, diagnostics for unknown entities, and go-to-definition for !include tags. |
-| **Screenshot Tool** | `false` | Enable visual verification of dashboards and UI pages. Uses headless Chromium to capture screenshots that vision-capable AI models can analyze. Requires a Long-Lived Access Token. See [Visual Verification](#visual-verification-screenshots). |
-| **Enable PPQ Private TEE Models (Beta)** | `false` | Start an internal PPQ private-mode encryption proxy and add it as an OpenCode provider. Requires **PPQ API Key**. This feature is included in stable releases, but should still be considered beta. See [PPQ Private TEE Models (Beta)](#ppq-private-tee-models-beta). |
-| **Enable OpenCode LAN Server** | `false` | Start an OpenCode server on internal port `4096` so clients on your local network can attach with the OpenCode CLI. Also requires mapping `4096/tcp` in the add-on Network settings. See [LAN Server Mode](#lan-server-mode). |
-| **Interface Mode** | `terminal` | Choose the browser interface shown in the sidebar: the classic `terminal` or the `openchamber` web UI. See [Interface Mode](#interface-mode). |
-
-### Interface Mode
+| **Interface mode** | `terminal` | Choose the browser interface shown in the sidebar: the classic `terminal` or the `openchamber` web UI. |
 
 The add-on can show either the terminal interface or the OpenChamber web UI in the Home Assistant sidebar.
 
@@ -44,7 +39,7 @@ Modes:
 
 To switch to OpenChamber:
 
-1. In the add-on **Configuration** tab, set **Interface Mode** to `openchamber`.
+1. In the add-on **Configuration** tab, set **Interface mode** to `openchamber`.
 2. Save and restart the add-on.
 3. Open **OpenCode** from the Home Assistant sidebar.
 
@@ -54,44 +49,70 @@ Security and networking notes:
 - The OpenChamber process binds to `127.0.0.1` inside the container.
 - A small first-party ingress proxy binds to internal port `8099`, accepts Home Assistant Ingress traffic, and forwards to OpenChamber locally.
 - Home Assistant Ingress provides the browser authentication layer, so no separate OpenChamber UI password is needed.
-- LAN access remains the separate opt-in **OpenCode LAN Server** feature on port `4096`.
+- LAN access remains the separate opt-in **Enable OpenCode LAN server** feature on port `4096`.
 
-If OpenChamber misbehaves (for example after an update), switch **Interface Mode** back to `terminal`, restart the add-on, and include logs when reporting the issue.
+If OpenChamber misbehaves (for example after an update), switch **Interface mode** back to `terminal`, restart the add-on, and include logs when reporting the issue.
 
 ### Terminal Appearance
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| **Terminal Theme** | `breeze` | Color scheme for the terminal. Options: `breeze`, `catppuccin_mocha`, `catppuccin_latte`, `dracula`, `nord`, `tokyo_night`, `one_dark`, `solarized_dark`, `solarized_light`, `gruvbox_dark` |
-| **Font Size** | `14` | Terminal font size in pixels (10-24) |
-| **Cursor Style** | `block` | Cursor appearance: `block`, `underline`, or `bar` |
-| **Blinking Cursor** | `false` | Whether the cursor should blink |
+| **Terminal theme** | `breeze` | Color scheme for the terminal. Options: `breeze`, `catppuccin_mocha`, `catppuccin_latte`, `dracula`, `nord`, `tokyo_night`, `one_dark`, `solarized_dark`, `solarized_light`, `gruvbox_dark`. See [Theme Previews](#theme-previews). |
+| **Font size** | `14` | Terminal font size in pixels (10-24). |
+| **Cursor style** | `block` | Cursor appearance: `block`, `underline`, or `bar`. |
+| **Cursor blinking** | `false` | Whether the cursor should blink. |
+
+### Home Assistant Integration
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| **Enable MCP integration** | `true` | Enable the Model Context Protocol (MCP) server for deep Home Assistant integration. Includes 35 tools, 14 resources, 6 guided prompts, and an intelligence layer for anomaly detection, config validation, and automation suggestions. |
+| **Enable LSP integration** | `true` | Enable the Language Server Protocol (LSP) server for intelligent YAML editing. Provides entity/service autocomplete, hover documentation, diagnostics for unknown entities, and go-to-definition for !include tags. |
+| **Enable screenshot tool** | `false` | Enable visual verification of dashboards and UI pages. Uses headless Chromium to capture screenshots that vision-capable AI models can analyze. Requires the access token below. See [Visual Verification](#visual-verification-screenshots). |
+| **Home Assistant access token** | `""` | A long-lived access token for direct communication with Home Assistant Core. Required for ESPHome integration and the screenshot tool. Create one in the Home Assistant UI under Profile → Long-lived access tokens. |
+
+### OpenCode Runtime
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| **OpenCode update policy** | `latest` | Controls how OpenCode itself is updated. `latest` installs and updates OpenCode in persistent add-on data so it can follow upstream releases independently of add-on releases. `bundled` uses only the OpenCode version included in the add-on image and disables OpenCode self-update. See [OpenCode Updates](#opencode-updates). |
+| **CPU mode** | `auto` | Controls which OpenCode binary is used. `auto` detects your CPU capabilities automatically (recommended). `baseline` forces the baseline binary for older CPUs without AVX2 support. `regular` forces the standard binary. |
+
+### Zigbee2MQTT and Serial Devices
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| **Zigbee2MQTT URL** | `""` | Optional URL for Zigbee2MQTT, used by zigporter commands such as `list-z2m` and `network-map --backend z2m`. Include `http://` or `https://`, for example `http://homeassistant.local:8099`. Host/IP-only values are treated as `http://`. |
+| **Zigbee2MQTT base topic** | `zigbee2mqtt` | MQTT base topic used by Zigbee2MQTT. |
+| **Serial devices** | `[]` | Optional list of host UART/serial devices to map into the add-on. Use this for workflows that need direct serial access, such as local USB flashing or adapter inspection. See [Serial Devices](#serial-devices). |
+
+### Privacy and Remote Access
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| **Enable PPQ private TEE models (beta)** | `false` | Start an internal PPQ private-mode encryption proxy and add it as an OpenCode provider. Requires **PPQ API key**. This feature should still be considered beta. See [PPQ Private TEE Models (Beta)](#ppq-private-tee-models-beta). |
+| **PPQ API key** | `""` | API key for PPQ private-mode models. Stored as a masked add-on option and exported only to the internal PPQ proxy service. Only needed for the PPQ feature. |
+| **Enable OpenCode LAN server** | `false` | Start an OpenCode server on internal port `4096` so clients on your local network can attach with the OpenCode CLI. Also requires mapping `4096/tcp` in the add-on Network settings. See [LAN Server Mode](#lan-server-mode). |
 
 ### Advanced Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| **CPU Mode** | `auto` | Controls which OpenCode binary is used. `auto` detects your CPU capabilities automatically (recommended). `baseline` forces the baseline binary for older CPUs without AVX2 support. `regular` forces the standard binary. |
-| **OpenCode Update Policy** | `latest` | Controls how OpenCode itself is updated. `latest` installs and updates OpenCode in persistent add-on data so it can follow upstream releases independently of add-on releases. `bundled` uses only the OpenCode version included in the add-on image and disables OpenCode self-update. |
-| **PPQ API Key** | `""` | API key for PPQ private-mode models. Stored as a masked add-on option and exported only to the internal PPQ proxy service. Only needed for the beta PPQ feature. |
-| **Enable Add-on Folder Guidance** | `false` | Shows terminal guidance for Home Assistant add-on development folders. The add-on mounts `/addons` and `/addon_configs` for development access; `/addon_configs` may contain sensitive add-on data. This option updates guidance after restart, but it is not a hard filesystem permission boundary. |
-| **Zigbee2MQTT URL** | `""` | Optional URL for Zigbee2MQTT, used by zigporter commands such as `list-z2m` and `network-map --backend z2m`. Include `http://` or `https://`, for example `http://homeassistant.local:8099`. Host/IP-only values are treated as `http://`. |
-| **Zigbee2MQTT MQTT Topic** | `zigbee2mqtt` | MQTT base topic used by Zigbee2MQTT. |
-| **Serial Devices** | `[]` | Optional list of host UART/serial devices to map into the add-on. Use this for workflows that need direct serial access, such as local USB flashing or adapter inspection. |
-| **Environment Variables** | `[]` | Define custom environment variables that are available to OpenCode and the terminal shell. Each entry has a `name` and `value`. Useful for provider credentials or configuration that must be set as environment variables (e.g. `AZURE_RESOURCE_NAME`, `OPENAI_API_KEY`). Changes take effect after restarting the add-on. Critical system variables (`HOME`, `PATH`, `SUPERVISOR_TOKEN`, etc.) cannot be overridden. |
-| **Custom OpenCode Configuration (JSON)** | `""` | Paste a JSON object to customize OpenCode's own configuration (providers, keybindings, etc.). This is merged with the add-on's built-in config. Leave empty for defaults. See [OpenCode config docs](https://opencode.ai/docs/config) for the full schema. |
+| **Enable add-on folder guidance** | `false` | Shows terminal guidance for Home Assistant add-on development folders. The add-on mounts `/addons` and `/addon_configs` for development access; `/addon_configs` may contain sensitive add-on data. This is guidance only, not a hard filesystem permission boundary. |
+| **Environment variables** | `[]` | Define custom environment variables that are available to OpenCode and the terminal shell. Each entry has a `name` and `value`. Useful for provider credentials or configuration that must be set as environment variables (e.g. `AZURE_RESOURCE_NAME`, `OPENAI_API_KEY`). Critical system variables (`HOME`, `PATH`, `SUPERVISOR_TOKEN`, etc.) cannot be overridden. |
+| **Custom OpenCode configuration** | `""` | Paste a JSON object to customize OpenCode's own configuration (providers, keybindings, etc.). This is merged with the add-on's built-in config. Leave empty for defaults. See [OpenCode config docs](https://opencode.ai/docs/config) for the full schema. |
 
 ### Resource Usage
 
-OpenCode snapshots are disabled by default in this add-on to reduce memory and disk pressure on Home Assistant systems. File watching also ignores noisy internal paths such as `.storage/`, `.cloud/`, caches, logs, and the Home Assistant database. You can override these defaults with **Custom OpenCode Configuration (JSON)** if you need OpenCode's built-in snapshot/undo behavior.
+OpenCode snapshots are disabled by default in this add-on to reduce memory and disk pressure on Home Assistant systems. File watching also ignores noisy internal paths such as `.storage/`, `.cloud/`, caches, logs, and the Home Assistant database. You can override these defaults with **Custom OpenCode configuration** if you need OpenCode's built-in snapshot/undo behavior.
 
 ### OpenCode Updates
 
-By default, **OpenCode Update Policy** is set to `latest`. On startup, the add-on installs or updates `opencode-ai@latest` into `/data/.npm-global` and puts that persistent install first in `PATH`. OpenCode's own patch-level self-update also uses this persistent npm prefix, so upstream OpenCode updates can survive add-on restarts without requiring a new add-on release.
+By default, **OpenCode update policy** is set to `latest`. On startup, the add-on installs or updates `opencode-ai@latest` into `/data/.npm-global` and puts that persistent install first in `PATH`. OpenCode's own patch-level self-update also uses this persistent npm prefix, so upstream OpenCode updates can survive add-on restarts without requiring a new add-on release.
 
 The add-on image still includes a bundled OpenCode copy as a fallback. If the startup update fails, the add-on logs a warning and continues with the existing persistent install or the bundled version.
 
-Set **OpenCode Update Policy** to `bundled` to use only the OpenCode version included in the add-on image. This also disables OpenCode self-update and ignores any persistent OpenCode install under `/data/.npm-global`.
+Set **OpenCode update policy** to `bundled` to use only the OpenCode version included in the add-on image. This also disables OpenCode self-update and ignores any persistent OpenCode install under `/data/.npm-global`.
 
 For x64 systems without visible AVX2 support, OpenCode selects its baseline binary. If this add-on runs in a VM on an AVX2-capable host, enable host CPU passthrough; generic QEMU/KVM CPU models can hide AVX2 and force the baseline binary unnecessarily. There is a known upstream baseline OOM issue tracked at `anomalyco/opencode#20988`.
 
@@ -124,7 +145,7 @@ To enable PPQ private models:
 
 1. Get a PPQ API key from PPQ.
 2. In the add-on **Configuration** tab, set **Enable PPQ Private TEE Models (Beta)** to `true`.
-3. Paste the key into **PPQ API Key**. Alternatively, set `PPQ_API_KEY` through **Environment Variables** if you manage credentials that way.
+3. Paste the key into **PPQ API key**. Alternatively, set `PPQ_API_KEY` through **Environment variables** if you manage credentials that way.
 4. Save and restart the add-on.
 5. In OpenCode, select the `PPQ Private (TEE)` provider and one of the `private/...` models.
 
@@ -132,7 +153,7 @@ Security notes:
 
 - The proxy binds only to `127.0.0.1:8787` inside the add-on container.
 - No Home Assistant network port is exposed for PPQ private mode.
-- The preferred PPQ API key path is the masked add-on option; `PPQ_API_KEY` in **Environment Variables** is also supported for advanced setups.
+- The preferred PPQ API key path is the masked add-on option; `PPQ_API_KEY` in **Environment variables** is also supported for advanced setups.
 - The PPQ API key is not logged.
 - The proxy package is pinned at image build time; the add-on does not run `npx latest` at startup.
 
@@ -160,7 +181,7 @@ LAN server mode lets you attach to the Home Assistant-hosted OpenCode session fr
 
 To enable LAN access:
 
-1. In the add-on **Configuration** tab, set **Enable OpenCode LAN Server** to `true`.
+1. In the add-on **Configuration** tab, set **Enable OpenCode LAN server** to `true`.
 2. In the add-on **Network** settings, map `4096/tcp` to the host port you want to use.
 3. Save and restart the add-on.
 
