@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 2.3.2b0
 
+- **OpenChamber updated to 1.14.0** — bumped the pinned `@openchamber/web` package and carried forward the Home Assistant ingress patching. Upstream 1.14.0 no longer emits the older Vite preload asset helper, so the patcher now treats that helper as optional while still enforcing the API path, API URL, runtime URL, service worker, and root asset rewrites.
 - **Configuration UI polish** — options are now grouped and ordered the way they render in the Configuration tab (interface first, then appearance, Home Assistant integration, runtime, integrations, privacy/network, advanced). Labels follow Home Assistant's sentence-case convention with parallel naming for toggles, descriptions use one consistent style for quoting and punctuation, and stable/beta wording drift was eliminated. Also adds the missing `.env_vars_discovered` backup exclusion on the beta channel.
 
 ## 2.3.0b8

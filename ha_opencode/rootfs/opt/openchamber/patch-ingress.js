@@ -146,6 +146,8 @@ for (const filePath of jsFiles) {
     patchedServiceWorker = true;
   }
 
+  // Vite emitted this helper in older OpenChamber bundles, but 1.14.0 switched
+  // to relative dynamic imports and no longer includes it.
   if (/assetsURL=function\((\w+)\)\{return"\/"\+\1\}/.test(content)) {
     content = replaceRegexOnce(
       content,
@@ -208,7 +210,7 @@ if (!patchedServiceWorker) {
   fail("service worker registration pattern not found");
 }
 if (!patchedViteAssetsUrl) {
-  fail("Vite preload asset URL helper pattern not found");
+  console.log("OpenChamber Vite preload asset helper not present; skipping helper patch");
 }
 
 console.log("OpenChamber bundle patched for Home Assistant Ingress");
