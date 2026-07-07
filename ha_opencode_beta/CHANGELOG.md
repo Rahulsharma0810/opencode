@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.3.4b0
+
+- **LAN server CORS support** — added a **LAN server CORS origins** option that passes one or more `--cors <origin>` flags to `opencode serve`. Browser-based clients that connect to the LAN server directly (rather than the OpenCode CLI) are blocked by the browser's same-origin policy without this: for example, the OpenChamber VS Code Extension's `openchamber.apiUrl` pointed at this add-on's LAN server could list providers/models (fetched outside the browser) but never received chat responses, because the message-send and event-stream requests are made from a browser webview and were silently blocked. `opencode serve` has no environment-variable equivalent for `--cors`, so this could not be worked around with the existing **Environment variables** option. The new option is empty by default and changes nothing for `opencode attach` or other non-browser clients. Fixes [#44](https://github.com/magnusoverli/opencode/issues/44).
+
 ## 2.3.2b1
 
 - **Fix OpenChamber 1.14.0 Vite preload assets under ingress** — patch the newer Vite modulepreload helper that rewrote `assets/...` dependency entries back to root `/assets/...`, causing 404s and stylesheet MIME errors in Home Assistant Ingress.

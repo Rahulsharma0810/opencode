@@ -9,6 +9,7 @@ This is the **beta channel** for the OpenCode add-on. It contains experimental f
 - **OpenChamber interface mode**: New experimental `openchamber` interface mode starts the OpenChamber web UI behind Home Assistant Ingress, while the default `terminal` mode keeps the existing ttyd terminal unchanged.
 - **Serial device access**: Selected host UART/serial devices can be mapped into the add-on for USB flashing and adapter inspection workflows. Full Supervisor `uart` and `udev` manifest flags remain disabled by default because they are static permissions, not runtime user options.
 - **Optional LAN server mode**: You can now enable an OpenCode server bound to `0.0.0.0` so other computers on your local network can connect directly.
+- **LAN server CORS origins**: The LAN server can now allow-list specific browser origins (`--cors`), so browser-based OpenCode clients — not just the CLI — can connect to it directly. See [LAN Server Mode (Beta)](#lan-server-mode-beta) below.
 - **PPQ private TEE models**: Opt-in encrypted proxy for PPQ private models running in remote TEEs. The proxy is internal-only and binds to `127.0.0.1` inside the add-on container.
 - **Web terminal clipboard fixes**: Copying inside OpenCode now reaches the browser clipboard, plain `Ctrl+V` paste works, and macOS users can use `Option+drag` to select text while full-screen terminal apps capture the mouse.
 - **Touch scrolling**: One-finger vertical drag gestures inside the terminal now scroll full-screen apps such as OpenCode on phones and tablets.
@@ -84,6 +85,18 @@ opencode attach http://192.168.1.50:4096
 The add-on log shows the current Home Assistant port mapping when the server starts, for example `Home Assistant port mapping: 4096/tcp -> 3443`. If OpenCode also prints `opencode server listening on http://0.0.0.0:4096`, that is the internal container listener, not the URL to use from another computer. Use your Home Assistant host and the mapped host port instead.
 
 Security warning: enabling this service and mapping the port exposes an OpenCode server on your LAN. Only use this on trusted networks, restrict access with your network/firewall controls, and never expose the port to the internet or untrusted networks.
+
+### Connecting a browser-based client (CORS)
+
+`opencode attach` and other non-browser clients work out of the box with the steps above. Browser-based clients that call the LAN server directly — for example the [OpenChamber VS Code Extension](https://marketplace.visualstudio.com/items?itemName=fedaykindev.openchamber)'s `openchamber.apiUrl` setting, or any other web/VS Code UI pointed at this server instead of its own local instance — are subject to the browser's CORS policy. Without an allowed origin, this can look like a partial connection: the client may still list providers/models, but sending a chat message or opening the event stream silently gets no response.
+
+To fix this:
+
+1. In the client, find the exact origin it's making requests from (scheme + host + port, no path). Your browser's developer tools Network tab will show this as the `Origin` request header, or as the URL of the page/webview hosting the client.
+2. In the add-on **Configuration** tab, add that origin under **LAN server CORS origins**, for example `http://192.168.1.20:8080`.
+3. Save and restart the add-on.
+
+This option only adds `--cors <origin>` flags to the OpenCode server; it does not change anything else about LAN server mode, and leaving it empty preserves the existing `opencode attach` behavior exactly.
 
 ## PPQ Private TEE Models (Beta)
 

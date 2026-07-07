@@ -68,6 +68,10 @@ configuration:
     name: "Enable OpenCode LAN server"
     description: "Start an OpenCode server on internal port 4096. To access it from another computer, also map 4096/tcp in the Network settings. Only use this on trusted networks and never expose it to the internet."
 
+  cors_origins:
+    name: "LAN server CORS origins (beta)"
+    description: "Browser origin(s) allowed to call the OpenCode LAN server directly, for example a web or VS Code UI (such as the OpenChamber extension) pointed at this add-on instead of using the OpenCode CLI. Each entry must be an exact origin (scheme + host + port, no path), for example 'http://192.168.1.20:8080'. Leave empty if you only use 'opencode attach' or other non-browser clients — without a matching entry here, browser-based clients may be able to list providers/models but never receive chat responses."
+
   addon_access_enabled:
     name: "Enable add-on folder guidance"
     description: "Show guidance for working with Home Assistant add-on folders. Security note: /addons and /addon_configs are mounted into this add-on for development access, and /addon_configs may contain sensitive add-on data. This is guidance only, not a hard filesystem permission boundary."

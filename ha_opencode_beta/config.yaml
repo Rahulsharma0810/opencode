@@ -1,7 +1,7 @@
 ---
 name: "OpenCode Beta"
 description: "Beta channel for OpenCode - AI coding agent for Home Assistant. May contain experimental features."
-version: "2.3.2b1"
+version: "2.3.4b0"
 slug: "ha_opencode_beta"
 image: "ghcr.io/magnusoverli/ha_opencode_beta"
 url: "https://github.com/magnusoverli/opencode"
@@ -95,6 +95,11 @@ options:
   # Optional LAN server mode for remote OpenCode clients.
   # Warning: If you map 4096/tcp in Network settings, this exposes an OpenCode server on your LAN.
   enable_server: false
+  # Browser origin(s) allowed to call the LAN server directly (CORS, beta).
+  # Only needed for browser-based clients (e.g. a web/VS Code UI pointed at
+  # this server); the OpenCode CLI ('opencode attach') does not need this.
+  # Example: http://192.168.1.20:8080
+  cors_origins: []
 
   # Advanced
   # Add-on development guidance for the mounted /addons and /addon_configs folders.
@@ -136,6 +141,8 @@ schema:
 
   # OpenCode LAN server mode
   enable_server: bool
+  cors_origins:
+    - str
 
   # Advanced
   addon_access_enabled: bool
