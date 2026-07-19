@@ -46,7 +46,7 @@ configuration:
 
   opencode_update_policy:
     name: "OpenCode update policy"
-    description: "Controls how OpenCode itself is updated. 'latest' installs and updates OpenCode in persistent add-on data so it can follow upstream releases independently of add-on releases. 'bundled' uses only the OpenCode version included in the add-on image and disables OpenCode self-update."
+    description: "Controls how OpenCode itself is updated. 'bundled' (default) uses the OpenCode version shipped in the add-on image — the lowest-memory option, recommended for systems with 4 GB RAM or limited free memory. 'latest' keeps OpenCode updated to the newest upstream release in persistent add-on data; the update now runs in the background so it never delays start-up, and it is skipped automatically when available memory is low."
 
   cpu_mode:
     name: "CPU mode"

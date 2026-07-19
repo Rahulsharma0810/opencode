@@ -16,7 +16,7 @@ This is the **beta channel** for the OpenCode add-on. It contains experimental f
 - **PPQ private TEE models**: Opt-in encrypted proxy for PPQ private models running in remote TEEs. The proxy is internal-only and binds to `127.0.0.1` inside the add-on container.
 - **Web terminal clipboard fixes**: Copying inside OpenCode now reaches the browser clipboard, plain `Ctrl+V` paste works, and macOS users can use `Option+drag` to select text while full-screen terminal apps capture the mouse.
 - **Touch scrolling**: One-finger vertical drag gestures inside the terminal now scroll full-screen apps such as OpenCode on phones and tablets.
-- **OpenCode update policy**: The add-on can keep OpenCode updated in persistent add-on data (`latest`) or use only the image-bundled version (`bundled`).
+- **OpenCode update policy**: Use only the image-bundled OpenCode (`bundled`, default, lowest memory use) or keep OpenCode updated to the newest release in the background (`latest`, skipped automatically on low-memory systems).
 
 ## Add-on Folder Access
 
@@ -28,9 +28,13 @@ Treat `/addon_configs` as sensitive because it may contain configuration data fo
 
 OpenCode snapshots are disabled by default in this add-on to reduce memory and disk pressure on Home Assistant systems. File watching also ignores noisy internal paths such as `.storage/`, `.cloud/`, caches, logs, and the Home Assistant database. You can override these defaults with **Custom OpenCode configuration** if you need OpenCode's built-in snapshot/undo behavior.
 
+On low-memory hosts — for example a 4 GB Home Assistant Green running several other add-ons — keep **OpenCode update policy** on `bundled` (the default) so the add-on does no memory-heavy start-up install. 8 GB or more is recommended for comfortable use alongside other memory-heavy add-ons such as Matter Server, Music Assistant, and Whisper/Piper.
+
 ## OpenCode Updates
 
-By default, **OpenCode Update Policy** is set to `latest`. The add-on installs or updates OpenCode in `/data/.npm-global` and uses that persistent install before the image-bundled fallback. Set the policy to `bundled` to use only the OpenCode version included in the add-on image and disable OpenCode self-update.
+By default, **OpenCode update policy** is set to `bundled`: the add-on uses the OpenCode version shipped in its image and does no start-up install — the lowest-memory option, recommended for systems with 4 GB RAM or limited free memory.
+
+Set the policy to `latest` to follow upstream OpenCode releases. The add-on starts immediately on the bundled (or an existing healthy persistent) binary, then refreshes `opencode-ai@latest` into `/data/.npm-global` **in the background**; the newer version becomes active for the next OpenCode session. The background update never blocks start-up and is skipped automatically when available memory is below ~1.5 GB. An interrupted or non-working update is discarded so the add-on keeps using the known-good bundled copy.
 
 For x64 VM installs, make sure the guest can see AVX2 when the host supports it. Generic QEMU/KVM CPU models can hide AVX2 and force OpenCode's baseline binary.
 

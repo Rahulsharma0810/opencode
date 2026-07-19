@@ -75,7 +75,7 @@ If OpenChamber misbehaves (for example after an update), switch **Interface mode
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| **OpenCode update policy** | `latest` | Controls how OpenCode itself is updated. `latest` installs and updates OpenCode in persistent add-on data so it can follow upstream releases independently of add-on releases. `bundled` uses only the OpenCode version included in the add-on image and disables OpenCode self-update. See [OpenCode Updates](#opencode-updates). |
+| **OpenCode update policy** | `bundled` | Controls how OpenCode itself is updated. `bundled` (default) uses the OpenCode version shipped in the add-on image — the lowest-memory option. `latest` follows upstream OpenCode releases, refreshed in the background so it never delays start-up and skipped automatically on low-memory systems. See [OpenCode Updates](#opencode-updates). |
 | **CPU mode** | `auto` | Controls which OpenCode binary is used. `auto` detects your CPU capabilities automatically (recommended). `baseline` forces the baseline binary for older CPUs without AVX2 support. `regular` forces the standard binary. |
 
 ### Zigbee2MQTT and Serial Devices
@@ -106,13 +106,13 @@ If OpenChamber misbehaves (for example after an update), switch **Interface mode
 
 OpenCode snapshots are disabled by default in this add-on to reduce memory and disk pressure on Home Assistant systems. File watching also ignores noisy internal paths such as `.storage/`, `.cloud/`, caches, logs, and the Home Assistant database. You can override these defaults with **Custom OpenCode configuration** if you need OpenCode's built-in snapshot/undo behavior.
 
+On low-memory hosts — for example a 4 GB Home Assistant Green running several other add-ons — keep **OpenCode update policy** on `bundled` (the default) so the add-on does no memory-heavy start-up install, and expect the agent itself to be memory-hungry during large tasks. 8 GB or more is recommended for comfortable use alongside other memory-heavy add-ons such as Matter Server, Music Assistant, and Whisper/Piper.
+
 ### OpenCode Updates
 
-By default, **OpenCode update policy** is set to `latest`. On startup, the add-on installs or updates `opencode-ai@latest` into `/data/.npm-global` and puts that persistent install first in `PATH`. OpenCode's own patch-level self-update also uses this persistent npm prefix, so upstream OpenCode updates can survive add-on restarts without requiring a new add-on release.
+By default, **OpenCode update policy** is set to `bundled`: the add-on uses the OpenCode version shipped in its image and does no start-up install. This is the lowest-memory option and is recommended for systems with 4 GB RAM or limited free memory.
 
-The add-on image still includes a bundled OpenCode copy as a fallback. If the startup update fails, the add-on logs a warning and continues with the existing persistent install or the bundled version.
-
-Set **OpenCode update policy** to `bundled` to use only the OpenCode version included in the add-on image. This also disables OpenCode self-update and ignores any persistent OpenCode install under `/data/.npm-global`.
+Set **OpenCode update policy** to `latest` to follow upstream OpenCode releases independently of add-on releases. The add-on starts immediately on the bundled (or an existing healthy persistent) binary, then refreshes `opencode-ai@latest` into `/data/.npm-global` **in the background**; the newer version becomes active for the next OpenCode session. The background update never blocks start-up, and it is skipped automatically when available memory is below ~1.5 GB so the install cannot push a low-memory host into swap-thrash. If an update is interrupted or produces a binary that will not run, the add-on discards it and keeps using the known-good bundled copy.
 
 For x64 systems without visible AVX2 support, OpenCode selects its baseline binary. If this add-on runs in a VM on an AVX2-capable host, enable host CPU passthrough; generic QEMU/KVM CPU models can hide AVX2 and force the baseline binary unnecessarily. There is a known upstream baseline OOM issue tracked at `anomalyco/opencode#20988`.
 
@@ -1178,7 +1178,7 @@ Check if you have enough memory. If the terminal shows `Killed`, check host logs
 ha-logs host 300 | grep -i "out of memory\|oom\|opencode"
 ```
 
-OpenCode can use significant memory on larger Home Assistant installations. This add-on disables OpenCode snapshots by default and ignores noisy internal paths to reduce memory pressure, but systems with limited RAM or full swap may still need more available memory.
+OpenCode can use significant memory on larger Home Assistant installations. This add-on disables OpenCode snapshots by default and ignores noisy internal paths to reduce memory pressure, but systems with limited RAM or full swap may still need more available memory. On 4 GB systems, make sure **OpenCode update policy** is set to `bundled` (the default) so the add-on does not run a memory-heavy update at start-up.
 
 ### Can't connect to AI provider
 

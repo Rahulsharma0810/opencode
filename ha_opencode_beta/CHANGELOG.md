@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.3.5b0
+
+- **Fixed the low-memory start-up crash loop (issue #51)** — on 4 GB devices (for example a Home Assistant Green) the boot-time `npm install -g opencode-ai@latest` could exhaust RAM, make Supervisor unresponsive, and leave the add-on in a watchdog crash loop (repeated exit code 137). Two changes remove this. The default **OpenCode update policy** is now `bundled`, so a fresh install runs entirely on the OpenCode shipped in the image with no start-up download. When you opt into `latest`, the ingress terminal now comes up immediately on the bundled (or an existing healthy persistent) binary while the update runs in a detached background process — off the health-check critical path — that is skipped automatically when free memory is below ~1.5 GB, so the npm spike can no longer push a low-memory host into swap-thrash. An interrupted or non-working update is now discarded instead of shadowing the working bundled binary, which also fixes the related `/data/.npm-global/bin/opencode: cannot execute: required file not found` failure.
+
 ## 2.3.4b1
 
 - **Native Home Assistant MCP readiness and bridge** — `get_agent_capabilities` now probes Home Assistant Core's native MCP endpoints, including the configured `/api/mcp` or `/api/mcp/<API ID>` endpoint and `/api/mcp/assist`, and reports whether OpenCode should use regular MCP only or a hybrid native-LLM-API/OpenCode-MCP mode. Added opt-in beta options for **Enable native Home Assistant MCP bridge** and **Native Home Assistant MCP API ID**. The bridge creates a second OpenCode MCP server (`homeassistant_native`) proxying to Home Assistant's native MCP endpoint when the running Home Assistant version supports it. The API ID defaults to `assist`, can target custom APIs registered inside Home Assistant, and can be left empty to target the configured `/api/mcp` endpoint. The bridge is disabled by default and does not replace OpenCode's built-in MCP tools.
