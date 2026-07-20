@@ -4,6 +4,15 @@ This is the **beta channel** for the OpenCode add-on. It contains experimental f
 
 **You can install this alongside the stable OpenCode add-on.** Both will appear in the sidebar (as "OpenCode" and "OpenCode Beta") and operate independently.
 
+## Upstream Attribution
+
+This independent Home Assistant add-on redistributes and integrates
+[OpenCode](https://github.com/anomalyco/opencode), copyright (c) 2025 opencode, under the
+MIT License. It is not made by, affiliated with, or endorsed by the OpenCode
+team or Anomaly. The complete OpenCode notice is included in the add-on image
+at `/usr/share/doc/ha-opencode/NOTICE` and in this repository's
+[`THIRD-PARTY-LICENSES.md`](../THIRD-PARTY-LICENSES.md).
+
 ## Current Beta Changes
 
 - **OpenChamber interface mode**: New experimental `openchamber` interface mode starts the OpenChamber web UI behind Home Assistant Ingress, while the default `terminal` mode keeps the existing ttyd terminal unchanged.

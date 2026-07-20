@@ -2,6 +2,15 @@
 
 OpenCode is an AI-powered coding agent that helps you edit and manage your Home Assistant configuration directly from your browser.
 
+## Upstream Attribution
+
+This independent Home Assistant add-on redistributes and integrates
+[OpenCode](https://github.com/anomalyco/opencode), copyright (c) 2025 opencode, under the
+MIT License. It is not made by, affiliated with, or endorsed by the OpenCode
+team or Anomaly. The complete OpenCode notice is included in the add-on image
+at `/usr/share/doc/ha-opencode/NOTICE` and in this repository's
+[`THIRD-PARTY-LICENSES.md`](../THIRD-PARTY-LICENSES.md).
+
 ## Features
 
 - **AI-Powered Editing**: Use natural language to modify your Home Assistant configuration
