@@ -1,7 +1,7 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## Unreleased
+## 2.3.5
 
 - **OpenCode attribution and license notices** - added a clear upstream credit, MIT notice, non-affiliation statement, and in-image notice for the OpenCode software distributed by this add-on.
 - **Hardened file access: sensitive files are read-protected by default (#53)** — a new **Restrict access to sensitive files** option (default on) adds an OpenCode `permission.read` deny rule for `secrets.yaml`, the `.storage/` and `.cloud/` directories, the `ssl/` directory, and `*.key`/`*.pem` files, so their contents cannot be read into the model's context. Everything else stays readable and normal `!secret`-based config editing is unaffected. Set the option to `false` to restore the previous fully-permissive behavior. Note: this guards OpenCode's file-read tool, not shell commands. Thanks @ChristopherBull for the suggestion.
