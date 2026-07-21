@@ -250,6 +250,48 @@ function proxyRequest(req, res) {
   const ingressPath = ingressPathFromRequest(req);
   const upstreamPath = stripIngressPath(req.url || "/", ingressPath);
 
+  // Canned "you are up to date" response for OpenChamber's update check.
+  // OpenChamber is pinned and Ingress-patched at image build time, and its
+  // self-update (an npm reinstall of @openchamber/web) cannot persist across
+  // restarts or stay patched for Ingress here -- it only hangs the UI on
+  // "Waiting for server...". OPENCHAMBER_UPDATE_API_URL points the server-side
+  // check at this endpoint so it always reports no update, which also makes the
+  // POST /api/openchamber/update-install route return "No update available"
+  // instead of running the doomed reinstall. The posted currentVersion is
+  // echoed back as latestVersion so the check resolves to available:false
+  // (the server discards a latestVersion older than currentVersion).
+  if (upstreamPath.split("?", 1)[0] === "/__ha_openchamber_update_check") {
+    const respond = (latestVersion) => {
+      if (res.headersSent) return;
+      res.writeHead(200, noStoreHeaders({
+        "content-type": "application/json; charset=utf-8",
+      }));
+      res.end(JSON.stringify({ latestVersion, updateAvailable: false }));
+    };
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+      // A version-check payload is tiny; drop anything unreasonable.
+      if (body.length > 65536) req.destroy();
+    });
+    req.on("end", () => {
+      // Fall back to a sentinel that is never older than the real version, so
+      // the server never treats the response as a stale downgrade.
+      let latestVersion = "99999.0.0";
+      try {
+        const parsed = JSON.parse(body);
+        if (typeof parsed.currentVersion === "string" && parsed.currentVersion.trim()) {
+          latestVersion = parsed.currentVersion.trim();
+        }
+      } catch {
+        // Malformed/empty body: keep the sentinel version.
+      }
+      respond(latestVersion);
+    });
+    req.on("error", () => respond("99999.0.0"));
+    return;
+  }
+
   if (upstreamPath.split("?", 1)[0] === "/__openchamber_ingress_runtime.js") {
     res.writeHead(200, noStoreHeaders({
       "content-type": "application/javascript; charset=utf-8",

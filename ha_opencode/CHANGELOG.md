@@ -1,6 +1,10 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- **Stop OpenChamber's built-in updater from hanging the UI** — OpenChamber ships a self-update check ("update available", plus an Update button in Settings → About), but OpenChamber is pinned and patched for Home Assistant Ingress at image build time, so an in-app update cannot persist across restarts or stay Ingress-patched — it just hung the UI on "Waiting for server...". The add-on now points OpenChamber's update-check API (`OPENCHAMBER_UPDATE_API_URL`) at a local canned "no update" endpoint served by the ingress proxy, so the update notification no longer appears and the update action reports "No update available" instead of hanging. OpenChamber is updated by updating the add-on.
+
 ## 2.3.5
 
 - **OpenCode attribution and license notices** - added a clear upstream credit, MIT notice, non-affiliation statement, and in-image notice for the OpenCode software distributed by this add-on.
