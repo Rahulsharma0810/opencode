@@ -83,11 +83,26 @@ const cssFiles = fs.readdirSync(assetsDir)
   .filter((name) => name.endsWith(".css"))
   .map((name) => path.join(assetsDir, name));
 
-// The two helper names in the API URL builder are minifier-assigned and drift
-// between releases (qo/Jo in 1.13.8, mn/Sn in 1.13.9), so match the statement
-// structure and carry the captured names into the replacement.
-const apiBuilderPattern = /const o=(\w+)\(e\);if\(!t\)return (\w+)\(o,r\);const n=new URL\(o,`\$\{t\}\/`\);/;
-const apiBuilderReplacement = 'const o=t?e.trim().replace(/^\\/+/,""):$1(e);if(!t)return $2(o,r);const n=new URL(o,`${t}/`);';
+// Every minified helper and variable name below is minifier-assigned and drifts
+// between OpenChamber releases (e.g. qo/Jo in 1.13.8, mn/Sn in 1.13.9, da/ma in
+// 1.16.x). Each pattern therefore captures the names structurally and reuses
+// them via a function replacement instead of hardcoding them, so the patch
+// survives minor version bumps. Validated against 1.14.x and 1.16.2.
+const runtimeUrlPattern =
+  /try\{return new URL\((\w+),`\$\{(\w+)\.replace\(\/\\\/\+\$\/,""\)\}\/`\)\.toString\(\)\}catch\{return \1\}\}/;
+const runtimeUrlReplacement = (_m, arg, base) =>
+  'try{return new URL(' + arg + '.replace(/^\\/+/,""),`${' + base + '.replace(/\\/+$/,"")}/`).toString()}catch{return ' + arg + '}}';
+
+// const RES=BUILD(ARG);if(!BASE)return RESOLVE(RES,EXTRA);const URLVAR=new URL(RES,`${BASE}/`);
+const apiBuilderPattern =
+  /const (\w+)=(\w+)\((\w+)\);if\(!(\w+)\)return (\w+)\(\1,(\w+)\);const (\w+)=new URL\(\1,`\$\{\4\}\/`\);/;
+const apiBuilderReplacement = (_m, res, build, arg, base, resolve, extra, urlVar) =>
+  'const ' + res + '=' + base + '?' + arg + '.trim().replace(/^\\/+/,""):' + build + '(' + arg + ');if(!' + base + ')return ' + resolve + '(' + res + ',' + extra + ');const ' + urlVar + '=new URL(' + res + ',`${' + base + '}/`);';
+
+const apiClassifierPattern =
+  /(\w+)=>\1\.startsWith\("\/api\/"\)\|\|\1==="\/api"\|\|\1\.startsWith\("\/auth\/"\)\|\|\1==="\/auth"\|\|\1==="\/health"/;
+const apiClassifierReplacement = (_m, p) =>
+  p + '=>!' + p + '.startsWith("/api/hassio_ingress/")&&(' + p + '.startsWith("/api/")||' + p + '==="/api"||' + p + '.startsWith("/auth/")||' + p + '==="/auth"||' + p + '==="/health")';
 
 let patchedRuntimeUrl = false;
 let patchedApiBuilder = false;
@@ -100,13 +115,8 @@ for (const filePath of jsFiles) {
   let content = fs.readFileSync(filePath, "utf8");
   const original = content;
 
-  if (content.includes('try{return new URL(e,`${r.replace(/\\/+$/,"")}/`).toString()}catch{return e}}')) {
-    content = replaceOnce(
-      content,
-      'try{return new URL(e,`${r.replace(/\\/+$/,"")}/`).toString()}catch{return e}}',
-      'try{return new URL(e.replace(/^\\/+/,""),`${r.replace(/\\/+$/,"")}/`).toString()}catch{return e}}',
-      "runtime URL builder"
-    );
+  if (runtimeUrlPattern.test(content)) {
+    content = replaceRegexOnce(content, runtimeUrlPattern, runtimeUrlReplacement, "runtime URL builder");
     patchedRuntimeUrl = true;
   }
 
@@ -127,13 +137,8 @@ for (const filePath of jsFiles) {
   // every fetch layer adds one more prefix. Requests then reach OpenChamber
   // with a residual ingress prefix, fall onto its /api -> OpenCode proxy mount,
   // and OpenCode answers with its web UI HTML instead of JSON.
-  if (content.includes('t=>t.startsWith("/api/")||t==="/api"||t.startsWith("/auth/")||t==="/auth"||t==="/health"')) {
-    content = replaceOnce(
-      content,
-      't=>t.startsWith("/api/")||t==="/api"||t.startsWith("/auth/")||t==="/auth"||t==="/health"',
-      't=>!t.startsWith("/api/hassio_ingress/")&&(t.startsWith("/api/")||t==="/api"||t.startsWith("/auth/")||t==="/auth"||t==="/health")',
-      "API path classifier"
-    );
+  if (apiClassifierPattern.test(content)) {
+    content = replaceRegexOnce(content, apiClassifierPattern, apiClassifierReplacement, "API path classifier");
     patchedApiClassifier = true;
   }
 

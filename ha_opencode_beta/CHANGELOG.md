@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.3.6b1
+
+- **OpenChamber updated to 1.16.2** — bumped the pinned `@openchamber/web` from 1.14.0 to the latest 1.16.2, and reworked the Home Assistant Ingress bundle patcher (`patch-ingress.js`) so it no longer breaks on OpenChamber's minified-name drift. The four required patches (runtime URL builder, API URL builder, API path classifier, service-worker) now match the bundle structurally and reuse the captured minifier names instead of hardcoding them, so the patch is validated to apply cleanly across 1.14.x through 1.16.2 and is more resilient to future version bumps. The bundle still binds to `127.0.0.1` behind the first-party ingress proxy as before.
+
 ## 2.3.6b0
 
 - **Stop OpenChamber's built-in updater from hanging the UI** — OpenChamber ships a self-update check ("update available", plus an Update button in Settings → About), but OpenChamber is pinned and patched for Home Assistant Ingress at image build time, so an in-app update cannot persist across restarts or stay Ingress-patched — it just hung the UI on "Waiting for server...". The add-on now points OpenChamber's update-check API (`OPENCHAMBER_UPDATE_API_URL`) at a local canned "no update" endpoint served by the ingress proxy, so the update notification no longer appears and the update action reports "No update available" instead of hanging. OpenChamber is updated by updating the add-on.
