@@ -92,6 +92,7 @@ import {
   normalizeNativeMcpApiId,
   probeNativeMcpEndpoint,
 } from "./lib/ha-native-mcp.js";
+import { formatErrorLogResult, readErrorLogWithFallback } from "./lib/ha-error-log.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -208,7 +209,7 @@ async function callHA(endpoint, method = "GET", body = null, timeoutMs = API_TIM
   if (!response.ok) {
     const text = await response.text();
     sendLog("error", "ha-api", { action: "error", endpoint, status: response.status, error: text });
-    throw new Error(`HA API error (${response.status}): ${text}`);
+    throw Object.assign(new Error(`HA API error (${response.status}): ${text}`), { status: response.status });
   }
 
   const contentType = response.headers.get("content-type");
@@ -256,6 +257,14 @@ async function callSupervisor(endpoint, method = "GET", body = null, timeoutMs =
     return result.data !== undefined ? result.data : result;
   }
   return response.text();
+}
+
+async function getErrorLogWithFallback(lines) {
+  return readErrorLogWithFallback({
+    readErrorLog: () => callHA("/error_log"),
+    readCoreLogs: (count) => callSupervisor(`/core/logs?lines=${encodeURIComponent(count)}`),
+    lines,
+  });
 }
 
 // Short-lived cache for the full state dump â€” many tools fetch /states and
@@ -2341,11 +2350,11 @@ const TOOLS = [
   {
     name: "get_error_log",
     title: "Get Error Log",
-    description: "Get the Home Assistant error log. Useful for debugging issues.",
+    description: "Get the Home Assistant error log. On Supervisor systems where the file-backed error log is unavailable, returns Core journal logs instead.",
     inputSchema: {
       type: "object",
       properties: {
-        lines: { type: "number", minimum: 1, maximum: 500, description: "Number of lines to return (default: 100, max: 500)" },
+        lines: { type: "integer", minimum: 1, maximum: 500, description: "Number of lines to return (default: 100, max: 500)" },
       },
       additionalProperties: false,
     },
@@ -3442,21 +3451,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "get_error_log": {
         // Supervisor proxies http://supervisor/core/api/* to HA's /api/*
-        const log = await callHA("/error_log");
         const requestedLines = Number.isFinite(args?.lines) ? args.lines : 100;
-        const lines = Math.max(1, Math.min(500, requestedLines));
-        const allLines = log.split("\n");
-        const logLines = allLines.slice(-lines);
+        const lines = Math.max(1, Math.min(500, Math.trunc(requestedLines)));
+        const { text: log, source } = await getErrorLogWithFallback(lines);
+        const result = formatErrorLogResult({ text: log, source, requestedLines, lines });
         return makeCompatibleResponse({
           content: [createCompactJsonContent(
-            `Returned ${logLines.length} Home Assistant error log lines`,
-            { log: logLines.join("\n") },
-            {
-              requested_lines: requestedLines,
-              returned_lines: logLines.length,
-              total_lines: allLines.length,
-              truncated: allLines.length > logLines.length,
-            },
+            result.summary,
+            result.data,
+            result.meta,
             { audience: ["assistant"], priority: 0.8 }
           )],
         });
@@ -4325,10 +4328,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           
           // Include any error log entries that might help
           try {
-            const log = await callHA("/error_log");
+            const { text: log, source } = await getErrorLogWithFallback(20);
             const recentLines = log.split("\n").slice(-20).join("\n");
             if (recentLines.trim()) {
-              responseText += `## Recent Error Log\n\n\`\`\`\n${recentLines}\n\`\`\`\n\n`;
+              const heading = source === "core_journal"
+                ? "Recent Core Journal Logs (Error Log Unavailable)"
+                : "Recent Error Log";
+              responseText += `## ${heading}\n\n\`\`\`\n${recentLines}\n\`\`\`\n\n`;
             }
           } catch (_) { /* best effort */ }
         }

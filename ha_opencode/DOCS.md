@@ -314,7 +314,7 @@ The app includes helper commands:
 | Command | Description |
 |---------|-------------|
 | `ha-logs core` | View Home Assistant Core logs |
-| `ha-logs error` | View Home Assistant error log |
+| `ha-logs error` | View Home Assistant error log (or Core journal logs when Supervisor disables the error-log file) |
 | `ha-logs supervisor` | View Supervisor logs |
 | `ha-logs host` | View host system logs |
 | `ha-logs core 200` | View last 200 lines of Core logs |
@@ -1155,6 +1155,8 @@ Or use the helper command:
 ```bash
 ha-logs error
 ```
+
+On Supervisor-based installations, the file-backed error log is unavailable. In that case, `ha-logs error` and the `get_error_log` MCP tool automatically return recent Core journal logs instead.
 
 ### Git Integration
 
